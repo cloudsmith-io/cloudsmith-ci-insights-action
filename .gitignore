@@ -10,7 +10,11 @@ __pycache__/
 .Python
 build/
 develop-eggs/
+# Keep bundled JS for GitHub Action (dist/index.js) but ignore other build artifacts
 dist/
+!job_log_fetcher/dist/
+!job_log_fetcher/dist/index.js
+!job_log_fetcher/licenses.txt
 downloads/
 eggs/
 .eggs/
@@ -205,3 +209,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+node_modules/

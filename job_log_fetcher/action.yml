@@ -1,0 +1,23 @@
+name: 'Job Log Fetcher'
+description: 'Fetch logs for a specific job in the current workflow run and expose as an output/file.'
+author: 'cloudsmith-io'
+inputs:
+  job-name:
+    description: 'Name of the job whose logs to fetch.'
+    required: true
+  max-retries:
+    description: 'Max attempts to fetch job logs while they become available.'
+    required: false
+    default: '5'
+  retry-delay-seconds:
+    description: 'Delay between retries (seconds).'
+    required: false
+    default: '3'
+outputs:
+  log-path:
+    description: 'Path to the file containing fetched job logs.'
+  log-snippet:
+    description: 'First 20 lines (for quick debug); may be truncated.'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
