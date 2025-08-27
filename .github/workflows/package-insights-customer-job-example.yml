@@ -1,9 +1,6 @@
 name: Package Insights Customer Workflow Example
 
 on:
-  push:
-    branches:
-      - '**'
   workflow_dispatch:
     inputs:
       follow-up:
