@@ -29,15 +29,38 @@ def build_headers(api_key: str) -> dict:
 
 def fetch_policies(namespace: str, headers: dict) -> dict:
     """Return a dict of policy_slug_perm -> policy object."""
-    url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/"
-    resp = requests.get(url, headers=headers)
+    base_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/"
+    page = 1
+    total_pages = None
     policies = {}
-    if resp.status_code == 200:
-        for policy in resp.json().get('results', []):
-            policies[policy.get('slug_perm')] = policy
-    else:
-        click.secho(f'⚠️  Failed to fetch policies (HTTP {resp.status_code})', fg='yellow')
-        click.echo(f'   Response: {resp.text[:100]}...' if len(resp.text) > 100 else f'   Response: {resp.text}')
+
+    while True:
+        url = f"{base_url}?page={page}"
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            click.secho(f'⚠️  Failed to fetch policies (page {page}) (HTTP {resp.status_code})', fg='yellow')
+            click.echo(f'   Response: {resp.text}')
+            break
+        try:
+            data = resp.json()
+        except ValueError:
+            click.secho(f'⚠️  Invalid JSON while fetching policies (page {page})', fg='yellow')
+            break
+        for policy in data.get('results', []):
+            slug = policy.get('slug_perm')
+            if slug and slug not in policies:  # avoid duplicates if any
+                policies[slug] = policy
+
+        if total_pages is None:
+            total_header = resp.headers.get('x-pagination-pagetotal')
+            if total_header and total_header.isdigit():
+                total_pages = int(total_header)
+            else:
+                # No pagination headers -> assume single page
+                break
+        page += 1
+        if total_pages is not None and page > total_pages:
+            break
     return policies
 
 
@@ -47,26 +70,60 @@ def parse_package_entry(entry: str):
     return entry, None
 
 
-def list_repo_packages(namespace: str, repo: str, headers: dict):
-    url = f"https://api.cloudsmith.io/packages/{namespace}/{repo}/?sort=-date"
-    resp = requests.get(url, headers=headers)
-    if resp.status_code != 200:
-        click.secho(f'⚠️  Failed to list packages in {namespace}/{repo} (HTTP {resp.status_code})', fg='yellow')
-        click.echo(f'   Response: {resp.text[:100]}...' if len(resp.text) > 100 else f'   Response: {resp.text}')
-        return None
-    return resp.json()
+def find_package(namespace: str, repo: str, headers: dict, name: str, version: Optional[str]):
+    """Iterate each package page until the (name, version) match is found or pages exhausted.
 
+    Cloudsmith pagination headers used:
+      x-pagination-pagetotal -> total number of pages (int)
+      x-pagination-count     -> current page (int) (provided in user description)
+    We request sequential pages and stop early once we locate the desired package.
+    """
+    base_url = f"https://api.cloudsmith.io/packages/{namespace}/{repo}/"
+    page = 1
+    total_pages = None
 
-def find_package(packages_data, name: str, version: Optional[str]):
-    if not packages_data:
-        return None
-    for pkg in packages_data:
-        if pkg.get('display_name') == name:
-            if version:
-                if pkg.get('version') == version:
+    while True:
+        url = f"{base_url}?sort=-date&page={page}"
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            click.secho(
+                f"⚠️  Failed to list packages (page {page}) in {namespace}/{repo} (HTTP {resp.status_code})",
+                fg='yellow'
+            )
+            click.echo(
+                f'   Response: {resp.text}'
+            )
+            return None
+
+        try:
+            packages = resp.json()
+        except ValueError:
+            click.secho(f"⚠️  Invalid JSON response for page {page}", fg='yellow')
+            return None
+
+        if isinstance(packages, dict) and 'results' in packages:
+            packages_iter = packages.get('results', [])
+        else:
+            packages_iter = packages
+
+        for pkg in packages_iter:
+            if pkg.get('display_name') == name:
+                if version is None or pkg.get('version') == version:
                     return pkg
+
+        # Determine total pages (one-time)
+        if total_pages is None:
+            total_header = resp.headers.get('x-pagination-pagetotal')
+            if total_header and total_header.isdigit():
+                total_pages = int(total_header)
             else:
-                return pkg
+                # If no pagination headers, assume single page
+                return None
+
+        page += 1
+        if total_pages is not None and page > total_pages:
+            break
+
     return None
 
 
@@ -230,13 +287,8 @@ def package_insights(log, follow_up):
     api_key = get_api_key()
     headers = build_headers(api_key)
     policies = fetch_policies(namespace, headers)
-    packages_data = list_repo_packages(namespace, repo, headers)
-    if packages_data is None:
-        sys.exit(4)
-    match = find_package(packages_data, package_name, package_version)
-    if match:
-        report_package(package_name, match, policies, namespace, headers, follow_up=follow_up)
-    else:
+    match = find_package(namespace, repo, headers, package_name, package_version)
+    if match is None:
         click.secho(f'❌ Package not found: {package_name}=={package_version}', fg='red', bold=True)
         click.echo(f'   Not present in repository: {namespace}/{repo}')
         if follow_up:
@@ -244,6 +296,7 @@ def package_insights(log, follow_up):
             click.secho("🎯 Next Steps:", fg='magenta', bold=True)
             click.echo(f"   {follow_up}")
         sys.exit(5)
+    report_package(package_name, match, policies, namespace, headers, follow_up=follow_up)
 
 
 
