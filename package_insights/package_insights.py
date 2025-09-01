@@ -202,7 +202,63 @@ def find_policy_for_action_slug(policies: dict, action_slug: str, namespace: str
     return None
 
 
-def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: str, follow_up: Optional[str] = None):
+def fetch_decision_logs(namespace: str, package_slug: str, headers: dict, limit: Optional[int] = 100):
+    """Fetch decision logs for a given package slug across all pages.
+
+    Args:
+        namespace: Workspace namespace.
+        package_slug: Package identifier (slug_perm).
+        headers: Auth headers.
+        limit: Optional cap on number of logs to return (None for all).
+
+    Pagination headers used:
+        x-pagination-page        -> current page number
+        x-pagination-pagesize    -> page size
+        x-pagination-pagetotal   -> total number of pages
+
+    Returns:
+        List of decision log entries (possibly truncated by limit) or empty list on error.
+    """
+    base_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/decision_logs/"
+    page = 1
+    total_pages = None
+    logs = []
+
+    while True:
+        url = f"{base_url}?sort=-started_at&page={page}&package={package_slug}"
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            click.secho(f"⚠️  Failed to fetch decision logs (page {page}) for package '{package_slug}' (HTTP {resp.status_code})", fg='yellow')
+            click.echo(f"   Response: {resp.text[:100]}..." if len(resp.text) > 100 else f"   Response: {resp.text}")
+            break
+        try:
+            data = resp.json()
+        except ValueError:
+            click.secho(f"⚠️  Invalid JSON while fetching decision logs (page {page})", fg='yellow')
+            break
+
+        page_logs = data.get('results', []) if isinstance(data, dict) else data
+        logs.extend(page_logs)
+
+        if limit is not None and len(logs) >= limit:
+            return logs[:limit]
+
+        if total_pages is None:
+            total_header = resp.headers.get('x-pagination-pagetotal') or resp.headers.get('X-Pagination-PageTotal')
+            if total_header and total_header.isdigit():
+                total_pages = int(total_header)
+            else:
+                # No pagination metadata -> single page
+                break
+
+        page += 1
+        if total_pages is not None and page > total_pages:
+            break
+
+    return logs
+
+
+def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: str, follow_up: Optional[str] = None, decision_logs: Optional[list] = None):
     status_str = pkg.get('status_str', 'Unknown')
     status_reason = pkg.get('status_reason', 'No reason provided')
     quarantined = pkg.get('is_quarantined', False)
@@ -245,6 +301,19 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
         for line in policy_info.split('\n'):
             click.echo(f"   {line}")
     
+    if decision_logs:
+        click.echo()
+        click.secho("📜 Decision Log Results (newest first):", fg='cyan', bold=True)
+        max_show = 1
+        for log in decision_logs[max_show:]:
+            policy = log.get("policy")
+            policy_name = policy.get("name")
+            policy_description = policy.get("description")
+            matched = log.get("policy_output").get("match")
+            click.echo(f"   • [{policy_name}]: Description {policy_description}\n\t Match? {matched}")
+        if len(decision_logs) > max_show:
+            click.echo(f"   … ({len(decision_logs)-max_show} more not shown)")
+
     if follow_up:
         click.echo()
         click.secho("🎯 Next Steps:", fg='magenta', bold=True)
@@ -339,12 +408,18 @@ def package_insights(log, follow_up):
             click.echo(f"   {follow_up}")
         sys.exit(5)
 
+
     status_reason = match.get('status_reason', 'No reason provided')
     action_slug = extract_action_slug(status_reason)
 
     policy_info = fetch_policy_of_action(namespace, headers, action_slug)
 
-    report_package(package_name, match, policy_info, action_slug, follow_up=follow_up)
+    decision_logs = []
+    package_slug = match.get("slug_perm", None)
+    if package_slug:
+        decision_logs = fetch_decision_logs(namespace, package_slug, headers, limit=20)
+
+    report_package(package_name, match, policy_info, action_slug, follow_up=follow_up, decision_logs=decision_logs)
 
 
 
