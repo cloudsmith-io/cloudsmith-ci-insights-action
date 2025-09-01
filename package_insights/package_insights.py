@@ -63,6 +63,51 @@ def fetch_policies(namespace: str, headers: dict) -> dict:
             break
     return policies
 
+def fetch_policy_of_action(namespace: str, headers: dict, action_slug: str) -> str|None:
+    """Return a dict of policy_slug_perm -> policy object."""
+    base_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/"
+    page = 1
+    total_pages = None
+
+    while True:
+        url = f"{base_url}?page={page}"
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            click.secho(f'⚠️  Failed to fetch policies (page {page}) (HTTP {resp.status_code})', fg='yellow')
+            click.echo(f'   Response: {resp.text}')
+            break
+        try:
+            data = resp.json()
+        except ValueError:
+            click.secho(f'⚠️  Invalid JSON while fetching policies (page {page})', fg='yellow')
+            break
+        for policy in data.get('results', []):
+            slug = policy.get('slug_perm')
+            actions_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/{slug}/actions/"
+            resp = requests.get(actions_url, headers=headers)
+            if resp.status_code != 200:
+                click.secho(f"⚠️  Could not fetch actions for policy '{slug}' (HTTP {resp.status_code})", fg='yellow')
+                continue
+            for action in resp.json().get('results', []):
+                if action.get('slug_perm') == action_slug:
+                    policy_name = policy.get('name', 'Unnamed Policy')
+                    policy_desc = policy.get('description', 'No description available')
+                    return (f"📋 Policy Name: {policy_name}\n"
+                        f"🔗 Policy Slug: {slug}\n"
+                        f"📝 Description: {policy_desc}")
+
+        if total_pages is None:
+            total_header = resp.headers.get('x-pagination-pagetotal')
+            if total_header and total_header.isdigit():
+                total_pages = int(total_header)
+            else:
+                # No pagination headers -> assume single page
+                break
+        page += 1
+        if total_pages is not None and page > total_pages:
+            break
+    return None
+
 
 def parse_package_entry(entry: str):
     if '==' in entry:
@@ -157,7 +202,7 @@ def find_policy_for_action_slug(policies: dict, action_slug: str, namespace: str
     return None
 
 
-def report_package(package_name: str, pkg: dict, policies: dict, namespace: str, headers: dict, follow_up: Optional[str] = None):
+def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: str, follow_up: Optional[str] = None):
     status_str = pkg.get('status_str', 'Unknown')
     status_reason = pkg.get('status_reason', 'No reason provided')
     quarantined = pkg.get('is_quarantined', False)
@@ -190,12 +235,10 @@ def report_package(package_name: str, pkg: dict, policies: dict, namespace: str,
     click.secho(f"📊 Package Status: {status_str}", fg='yellow')
     click.secho(f"💬 Reason: {status_reason}", fg='yellow')
     
-    action_slug = extract_action_slug(status_reason)
     if action_slug:
         click.echo()
         click.secho(f"🔑 Action Slug: {action_slug}", fg='magenta')
     
-    policy_info = find_policy_for_action_slug(policies, action_slug, namespace, headers) if action_slug else None
     if policy_info:
         click.echo()
         click.secho("🛡️  POLICY DETAILS:", fg='blue', bold=True)
@@ -286,7 +329,6 @@ def package_insights(log, follow_up):
         return
     api_key = get_api_key()
     headers = build_headers(api_key)
-    policies = fetch_policies(namespace, headers)
     match = find_package(namespace, repo, headers, package_name, package_version)
     if match is None:
         click.secho(f'❌ Package not found: {package_name}=={package_version}', fg='red', bold=True)
@@ -296,7 +338,14 @@ def package_insights(log, follow_up):
             click.secho("🎯 Next Steps:", fg='magenta', bold=True)
             click.echo(f"   {follow_up}")
         sys.exit(5)
-    report_package(package_name, match, policies, namespace, headers, follow_up=follow_up)
+
+    status_reason = match.get('status_reason', 'No reason provided')
+    action_slug = extract_action_slug(status_reason)
+
+    policy_info = fetch_policy_of_action(namespace, headers, action_slug)
+
+    report_package(package_name, match, policy_info, action_slug, follow_up=follow_up)
+
 
 
 
