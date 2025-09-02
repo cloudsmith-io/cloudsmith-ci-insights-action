@@ -1,5 +1,5 @@
 import pytest
-from package_insights.package_insights import parse_log_for_details
+from package_insights.package_insights import parse_logs_for_all_details
 
 
 @pytest.mark.parametrize(
@@ -25,7 +25,8 @@ from package_insights.package_insights import parse_log_for_details
     ],
 )
 def test_parse_log_for_details_success_cases(log_text, expected):
-    assert parse_log_for_details(log_text) == expected
+    all_matches = parse_logs_for_all_details(log_text, unique=True)
+    assert all_matches and all_matches[0] == expected
 
 
 def test_multiple_matches_returns_first():
@@ -33,7 +34,30 @@ def test_multiple_matches_returns_first():
         "403 https://dl.cloudsmith.io/public/first/ns/python/firstpkg-1.0.0.tar.gz\n"
         "403 https://dl.cloudsmith.io/public/second/ns/python/secondpkg-2.0.0.whl\n"
     )
-    assert parse_log_for_details(log) == ("first", "ns", "firstpkg", "1.0.0")
+    assert parse_logs_for_all_details(log)[0] == ("first", "ns", "firstpkg", "1.0.0")
+    assert parse_logs_for_all_details(log) == [
+        ("first", "ns", "firstpkg", "1.0.0"),
+        ("second", "ns", "secondpkg", "2.0.0"),
+    ]
+
+
+def test_multiple_matches_with_duplicates():
+    log = (
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/dupkg-1.2.3.tar.gz\n"
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/dupkg-1.2.3.tar.gz\n"  # duplicate
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/other-2.0.0.whl\n"
+    )
+    # unique=True default removes duplicate
+    assert parse_logs_for_all_details(log) == [
+        ("acme", "tools", "dupkg", "1.2.3"),
+        ("acme", "tools", "other", "2.0.0"),
+    ]
+    # unique=False keeps both occurrences
+    assert parse_logs_for_all_details(log, unique=False) == [
+        ("acme", "tools", "dupkg", "1.2.3"),
+        ("acme", "tools", "dupkg", "1.2.3"),
+        ("acme", "tools", "other", "2.0.0"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -49,9 +73,9 @@ def test_multiple_matches_returns_first():
     ],
 )
 def test_parse_log_for_details_no_match(log_text):
-    assert parse_log_for_details(log_text) == (None, None, None, None)
+    assert parse_logs_for_all_details(log_text) == []
 
 
 def test_parse_log_for_details_complex_name_and_version():
     log = "403 https://dl.cloudsmith.io/public/acme/tools/python/my.pkg_name-12.0.0.post1.tar.gz"
-    assert parse_log_for_details(log) == ("acme", "tools", "my.pkg_name", "12.0.0.post1")
+    assert parse_logs_for_all_details(log)[0] == ("acme", "tools", "my.pkg_name", "12.0.0.post1")

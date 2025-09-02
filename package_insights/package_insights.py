@@ -228,7 +228,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
             click.secho("🎯 Next Steps:", fg='magenta', bold=True)
             click.echo(f"   {follow_up}")
         click.echo("=" * 60)
-        return
+        return False  # not quarantined
     
     # Quarantined package
     click.secho("🚫 Status: QUARANTINED", fg='red', bold=True)
@@ -256,7 +256,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
     
     click.echo("=" * 60)
     click.secho("❌ PACKAGE QUARANTINED", fg='red', bold=True)
-    sys.exit(1)
+    return quarantined # True
 
 
 LOG_403_TARBALL_URL_RE = re.compile(
@@ -274,14 +274,32 @@ LOG_403_TARBALL_URL_RE = re.compile(
     """,
     re.VERBOSE
 )
-def parse_log_for_details(log_text: str):
-    """Extract namespace, repo, package name and version from log output."""
+def parse_logs_for_all_details(log_text: str, unique: bool = True):
+    """Return a (optionally de-duplicated) list of all matches.
 
-    m = LOG_403_TARBALL_URL_RE.search(log_text)
-    if m:
+    Args:
+        log_text: Raw log content.
+        unique: When True (default) duplicate (namespace, repo, package, version)
+                tuples are removed while preserving first-seen order. Set to
+                False to return every raw match (including repeats from
+                retries in pip output).
+
+    Returns:
+        List[Tuple[str,str,str,str]] in order of appearance (first occurrence
+        order if unique=True). Empty list if no matches.
+    """
+    results = []
+    seen = set()
+    for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
         namespace, repo, pkg, ver = m.groups()
-        return namespace, repo, pkg, ver
-    return None, None, None, None
+        tup = (namespace, repo, pkg, ver)
+        if not unique:
+            results.append(tup)
+        else:
+            if tup not in seen:
+                seen.add(tup)
+                results.append(tup)
+    return results
 
 
 def _read_log_text(log):
@@ -327,30 +345,39 @@ def package_insights(log, follow_up):
     log_text = _read_log_text(log)
     if not _validate_log(log_text):
         return
-    namespace, repo, package_name, package_version = parse_log_for_details(log_text)
-    if not package_name:
+    matches = parse_logs_for_all_details(log_text, unique=True)
+    if not matches:
         _handle_parse_error()
         return
+
     api_key = get_api_key()
     headers = build_headers(api_key)
-    match = find_package(namespace, repo, headers, package_name, package_version)
-    if match is None:
-        click.secho(f'❌ Package not found: {package_name}=={package_version}', fg='red', bold=True)
-        click.echo(f'   Not present in repository: {namespace}/{repo}')
-        if follow_up:
-            click.echo()
-            click.secho("🎯 Next Steps:", fg='magenta', bold=True)
-            click.echo(f"   {follow_up}")
-        sys.exit(5)
 
-    status_reason = match.get('status_reason', 'No reason provided')
-    action_slug = extract_action_slug(status_reason)
+    # Track whether any quarantined package exists to triggered an exit code after loop.
+    quarantined_detected = False
+    for namespace, repo, package_name, package_version in matches:
+        match = find_package(namespace, repo, headers, package_name, package_version)
+        if match is None:
+            _handle_package_not_found(package_name, package_version, namespace, repo, follow_up)
 
-    policy_info = None
-    if action_slug:
-        policy_info = fetch_policy_of_action(namespace, headers, action_slug)
+        status_reason = match.get('status_reason', 'No reason provided')
+        action_slug = extract_action_slug(status_reason)
+        policy_info = None
+        if action_slug:
+            policy_info = fetch_policy_of_action(namespace, headers, action_slug)
+        quarantined = report_package(
+            package_name,
+            match,
+            policy_info,
+            action_slug,
+            follow_up=follow_up
+        )
+        if quarantined:
+            quarantined_detected = True
 
-    report_package(package_name, match, policy_info, action_slug, follow_up=follow_up)
+    if quarantined_detected:
+        # After reporting all, use exit code 1 to indicate at least one quarantined
+        sys.exit(1)
 
 
 
