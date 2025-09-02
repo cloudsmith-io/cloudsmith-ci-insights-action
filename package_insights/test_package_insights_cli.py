@@ -170,3 +170,65 @@ def test_cli_quarantined_package_no_policy_match(runner, monkeypatch):
     assert "PACKAGE QUARANTINED" in result.output
     # No policy details section should appear
     assert "No associated policy found" in result.output
+
+
+def test_cli_multiple_blocked_packages(runner, monkeypatch):
+    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
+    log_text = (
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/pkg1-1.0.0.tar.gz\n"
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/pkg2-2.0.0.whl\n"
+        # duplicate (should be deduped)
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/pkg1-1.0.0.tar.gz\n"
+    )
+
+    packages_payload = [
+        _build_package("pkg1", "1.0.0", quarantined=False, status_reason=None),
+        _build_package("pkg2", "2.0.0", quarantined=False, status_reason=None),
+    ]
+
+    def fake_get(url, headers=None):
+        if "packages/acme/tools" in url:
+            return _MockResponse(packages_payload, headers={"x-pagination-pagetotal": "1"})
+        if url.startswith("https://api.cloudsmith.io/v2/workspaces/acme/policies/") and "/actions/" not in url:
+            return _MockResponse({"results": []}, headers={"x-pagination-pagetotal": "1"})
+        raise AssertionError(f"Unexpected URL {url}")
+
+    monkeypatch.setattr(package_insights_module.requests, "get", fake_get)
+    result = runner.invoke(package_insights, [log_text])
+    assert result.exit_code == 0
+    # Both packages should appear once
+    assert result.output.count("pkg1==1.0.0") == 1
+    assert result.output.count("pkg2==2.0.0") == 1
+
+
+def test_cli_multiple_with_quarantined_reports_all(runner, monkeypatch):
+    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
+    action_slug = "ACTZ"
+    status_reason_quar = "Quarantined by slug_perm 'ACTZ'"
+    log_text = (
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/cleanpkg-1.0.0.tar.gz\n"
+        "403 https://dl.cloudsmith.io/public/acme/tools/python/badpkg-2.0.0.whl\n"
+    )
+    packages_payload = [
+        _build_package("cleanpkg", "1.0.0", quarantined=False, status_reason=None),
+        _build_package("badpkg", "2.0.0", quarantined=True, status_reason=status_reason_quar),
+    ]
+    policies = [{"slug_perm": "policy-x", "name": "Policy X", "description": "Desc"}]
+    actions = {"results": [{"slug_perm": action_slug, "effect": "QUARANTINE"}]}
+
+    def fake_get(url, headers=None):
+        if "packages/acme/tools" in url:
+            return _MockResponse(packages_payload, headers={"x-pagination-pagetotal": "1"})
+        if url.startswith("https://api.cloudsmith.io/v2/workspaces/acme/policies/") and "/actions/" not in url:
+            return _MockResponse({"results": policies}, headers={"x-pagination-pagetotal": "1"})
+        if url.startswith("https://api.cloudsmith.io/v2/workspaces/acme/policies/policy-x/actions/"):
+            return _MockResponse(actions, headers={"x-pagination-pagetotal": "1"})
+        raise AssertionError(f"Unexpected URL {url}")
+
+    monkeypatch.setattr(package_insights_module.requests, "get", fake_get)
+    result = runner.invoke(package_insights, [log_text])
+    # exit code 1 due to quarantined package, but both packages should be reported
+    assert result.exit_code == 1
+    assert "cleanpkg==1.0.0" in result.output
+    assert "badpkg==2.0.0" in result.output
+    assert "PACKAGE QUARANTINED" in result.output
