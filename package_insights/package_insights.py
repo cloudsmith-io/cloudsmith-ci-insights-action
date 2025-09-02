@@ -247,7 +247,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
     else:
         click.echo()
         click.secho("🛡️  POLICY DETAILS:", fg='blue', bold=True)
-        click.echo("   No associated policy found")
+        click.echo("   No associated policy found - this can happen when the action has occurred but since been deleted")
     
     if follow_up:
         click.echo()
@@ -274,25 +274,50 @@ LOG_403_TARBALL_URL_RE = re.compile(
     """,
     re.VERBOSE
 )
+
+# Matches the 'ERROR: Could not install requirement <pkg>==<ver> from <url>' line
+ERROR_COULD_NOT_INSTALL_RE = re.compile(
+    r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.-]*)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
+    re.IGNORECASE,
+)
+
+# Extract namespace/repo from any Cloudsmith python artifact/index URL
+NS_REPO_FROM_URL_RE = re.compile(r"https://dl\.cloudsmith\.io/[^/]+/([^/]+)/([^/]+)/python/")
 def parse_logs_for_all_details(log_text: str, unique: bool = True):
-    """Return a (optionally de-duplicated) list of all matches.
+    """Parse log output for all (namespace, repo, package, version) tuples.
 
-    Args:
-        log_text: Raw log content.
-        unique: When True (default) duplicate (namespace, repo, package, version)
-                tuples are removed while preserving first-seen order. Set to
-                False to return every raw match (including repeats from
-                retries in pip output).
-
-    Returns:
-        List[Tuple[str,str,str,str]] in order of appearance (first occurrence
-        order if unique=True). Empty list if no matches.
+    Strategy (revised):
+      1. Prefer lines of the form:
+         'ERROR: Could not install requirement <pkg>==<ver> from <url> ...'
+         extracting <pkg>, <ver>, and deriving namespace/repo from the <url>.
+      2. If no such lines are found, fall back to legacy artifact URL parsing
+         (extracting name/version directly from artifact filename).
     """
-    results = []
-    seen = set()
-    for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
-        namespace, repo, pkg, ver = m.groups()
+    results: list[tuple[str,str,str,str]] = []
+    seen: set[tuple[str,str,str,str]] = set()
+
+    # Primary: error lines
+    for m in ERROR_COULD_NOT_INSTALL_RE.finditer(log_text):
+        pkg, ver, url = m.groups()
+        nsrp = NS_REPO_FROM_URL_RE.search(url)
+        if not nsrp:
+            continue  # can't build tuple without namespace/repo
+        namespace, repo = nsrp.groups()
         tup = (namespace, repo, pkg, ver)
+        if not unique:
+            results.append(tup)
+        else:
+            if tup not in seen:
+                seen.add(tup)
+                results.append(tup)
+
+    if results:
+        return results
+
+    # Fallback: artifact URLs
+    for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
+        ns, rp, pkg, ver = m.groups()
+        tup = (ns, rp, pkg, ver)
         if not unique:
             results.append(tup)
         else:

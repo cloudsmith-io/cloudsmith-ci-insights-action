@@ -6,6 +6,19 @@ from package_insights.package_insights import parse_logs_for_all_details
     "log_text,expected",
     [
         (
+            """
+            Looking in indexes: https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/simple/
+            Collecting python-gitlab==3.1.1
+            WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPSConnectionPool(host='dl.cloudsmith.io', port=443): Read timed out. (read timeout=15)")': /pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/python_gitlab-3.1.1-py3-none-any.whl
+            ERROR: HTTP error 403 while getting https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/python_gitlab-3.1.1-py3-none-any.whl#sha256=2a7de39c8976db6d0db20031e71b3e43d262e99e64b471ef09bf00482cd3d9fa (from https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/simple/python-gitlab/) (requires-python:>=3.7.0)
+
+            [notice] A new release of pip is available: 25.1.1 -> 25.2
+            [notice] To update, run: pip install --upgrade pip
+            ERROR: Could not install requirement python-gitlab==3.1.1 from https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/python_gitlab-3.1.1-py3-none-any.whl#sha256=2a7de39c8976db6d0db20031e71b3e43d262e99e64b471ef09bf00482cd3d9fa because of HTTP error 403 Client Error: Forbidden for url: https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/python_gitlab-3.1.1-py3-none-any.whl for URL https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/python_gitlab-3.1.1-py3-none-any.whl#sha256=2a7de39c8976db6d0db20031e71b3e43d262e99e64b471ef09bf00482cd3d9fa (from https://dl.cloudsmith.io/pzvJ5VJQLGivg1uL/mark-testing/python-stuff/python/simple/python-gitlab/) (requires-python:>=3.7.0)
+            """,
+            ("mark-testing", "python-stuff", "python-gitlab", "3.1.1"),
+    ),
+        (
             "ERROR 403 while downloading https://dl.cloudsmith.io/public/myspace/myrepo/python/pkgname-1.2.3.tar.gz (for user)",
             ("myspace", "myrepo", "pkgname", "1.2.3"),
         ),
@@ -24,7 +37,7 @@ from package_insights.package_insights import parse_logs_for_all_details
         ),
     ],
 )
-def test_parse_log_for_details_success_cases(log_text, expected):
+def test_parse_logs_for_all_details_success_cases(log_text, expected):
     all_matches = parse_logs_for_all_details(log_text, unique=True)
     assert all_matches and all_matches[0] == expected
 
@@ -72,10 +85,10 @@ def test_multiple_matches_with_duplicates():
         "403 https://dl.cloudsmith.io/public/ns/repo/python/pkgname-1.2.3.txt",
     ],
 )
-def test_parse_log_for_details_no_match(log_text):
+def test_parse_logs_for_all_details_no_match(log_text):
     assert parse_logs_for_all_details(log_text) == []
 
 
-def test_parse_log_for_details_complex_name_and_version():
+def test_parse_logs_for_all_details_complex_name_and_version():
     log = "403 https://dl.cloudsmith.io/public/acme/tools/python/my.pkg_name-12.0.0.post1.tar.gz"
     assert parse_logs_for_all_details(log)[0] == ("acme", "tools", "my.pkg_name", "12.0.0.post1")
