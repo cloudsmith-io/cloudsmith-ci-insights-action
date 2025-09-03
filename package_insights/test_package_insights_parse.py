@@ -43,14 +43,7 @@ def test_multiple_matches_with_duplicates():
         "ERROR: Could not install requirement dupkg==1.2.3 from https://dl.cloudsmith.io/public/acme/tools/python/dupkg-1.2.3.tar.gz because of HTTP error 403 Client Error: Forbidden for url\n"  # duplicate
         "ERROR: Could not install requirement other==2.0.0 from https://dl.cloudsmith.io/public/acme/tools/python/other-2.0.0.whl because of HTTP error 403 Client Error: Forbidden for url\n"
     )
-    # unique=True default removes duplicate
     assert parse_logs_for_all_details(log) == [
-        ("acme", "tools", "dupkg", "1.2.3"),
-        ("acme", "tools", "other", "2.0.0"),
-    ]
-    # unique=False keeps both occurrences
-    assert parse_logs_for_all_details(log, unique=False) == [
-        ("acme", "tools", "dupkg", "1.2.3"),
         ("acme", "tools", "dupkg", "1.2.3"),
         ("acme", "tools", "other", "2.0.0"),
     ]
@@ -58,7 +51,7 @@ def test_multiple_matches_with_duplicates():
 
 def test_parse_logs_for_all_details_complex_name_and_version():
     log = "ERROR: Could not install requirement from https://dl.cloudsmith.io/public/acme/tools/python/my.pkg_name-12.0.0.post1.tar.gz because of HTTP error 403 Client Error: Forbidden for url"
-    assert parse_logs_for_all_details(log)[0] == ("acme", "tools", "my.pkg-name", "12.0.0")
+    assert parse_logs_for_all_details(log)[0] == ("acme", "tools", "my.pkg-name", "12.0.0.post1")
 
 
 def test_parse_logs_for_all_details_no_version_in_error_line_but_artifact_present():
@@ -66,3 +59,44 @@ def test_parse_logs_for_all_details_no_version_in_error_line_but_artifact_presen
         "ERROR: Could not install requirement python-gitlab from https://dl.cloudsmith.io/public/ws/repo/python/python_gitlab-6.3.0-py3-none-any.whl#sha256=abc because of HTTP error 403 Client Error: Forbidden for url"
     )
     assert parse_logs_for_all_details(log)[0] == ("ws", "repo", "python-gitlab", "6.3.0")
+
+
+def test_parse_npm_signed_fetch_lines():
+    log = (
+        "npm http fetch GET 403 https://dl.cloudsmith.io/signed/mark-testing/python-stuff/upstream/filename/npm/xml2js/xml2js-0.6.2.tgz?created=1&expires=2 10ms\n"
+        "npm http fetch GET 403 https://dl.cloudsmith.io/signed/mark-testing/python-stuff/upstream/filename/npm/jmespath/jmespath-0.16.0.tgz?created=1&expires=2 11ms\n"
+        "npm error 403 403 Forbidden - GET https://npm.cloudsmith.io/mark-testing/python-stuff/xmlbuilder/-/xmlbuilder-11.0.1.tgz - Package is quarantined.\n"
+    )
+    matches = parse_logs_for_all_details(log)
+    assert ("mark-testing", "python-stuff", "xml2js", "0.6.2") in matches
+    assert ("mark-testing", "python-stuff", "jmespath", "0.16.0") in matches
+
+
+def test_parse_npm_error_direct_quarantine_line():
+    log = (
+        "npm error code E403\n"
+        "npm error 403 403 Forbidden - GET https://npm.cloudsmith.io/mark-testing/python-stuff/xmlbuilder/-/xmlbuilder-11.0.1.tgz - Package is quarantined.\n"
+    )
+    matches = parse_logs_for_all_details(log)
+    assert matches[0] == ("mark-testing", "python-stuff", "xmlbuilder", "11.0.1")
+
+
+def test_parse_npm_error_signed_line():
+    log = (
+        "npm error code E403\n"
+        "npm error 403 403 Forbidden - GET https://dl.cloudsmith.io/signed/mark-testing/python-stuff/upstream/filename/npm/vary/vary-1.1.2.tgz?created=1&expires=2\n"
+    )
+    matches = parse_logs_for_all_details(log)
+    assert matches[0] == ("mark-testing", "python-stuff", "vary", "1.1.2")
+
+
+def test_parse_multiple_npm_direct_fetch_lines():
+    log = (
+        "npm http fetch GET 403 https://npm.cloudsmith.io/mark-testing/python-stuff/xmlbuilder/-/xmlbuilder-11.0.1.tgz 10ms (cache skip)\n"
+        "npm http fetch GET 403 https://npm.cloudsmith.io/mark-testing/python-stuff/querystring/-/querystring-0.2.0.tgz 11ms (cache skip)\n"
+        "npm http fetch GET 403 https://npm.cloudsmith.io/mark-testing/python-stuff/url/-/url-0.10.3.tgz 12ms (cache skip)\n"
+    )
+    matches = parse_logs_for_all_details(log)
+    assert ("mark-testing", "python-stuff", "xmlbuilder", "11.0.1") in matches
+    assert ("mark-testing", "python-stuff", "querystring", "0.2.0") in matches
+    assert ("mark-testing", "python-stuff", "url", "0.10.3") in matches

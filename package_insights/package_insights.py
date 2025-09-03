@@ -198,10 +198,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
     quarantined = pkg.get('is_quarantined', False)
     version = pkg.get('version')
     
-    # Header with package info
-    click.echo("=" * 60)
-    click.secho("☁️  CLOUDSMITH INSIGHTS ☁️", fg='cyan', bold=True)
-    click.echo("=" * 60)
+    # Package info
     click.secho(f"📦 Package: {package_name}=={version} 📦", fg='white', bold=True)
     click.echo("-" * 40)
     
@@ -244,8 +241,9 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
         click.secho("🎯 Next Steps:", fg='magenta', bold=True)
         click.echo(f"   {follow_up}")
     
-    click.echo("=" * 60)
-    click.secho("❌ PACKAGE QUARANTINED", fg='red', bold=True)
+    click.echo("-" * 40)
+    click.echo()
+
     return quarantined # True
 
 
@@ -269,39 +267,36 @@ class BaseFormatClientParser:
     """Base parser for a (package_format, client) pair.
 
     Subclasses should implement:
-      detect(log_text): return True if this parser applies
+      log_matches_format_and_client(log_text): return True if the logs indicate this is the correct parser
       extract(log_text): yield raw tuples (workspace, repo, package, version)
-      normalize_name(name)
-      normalize_version(version)
+      normalise_name(name)
+      normalise_version(version)
     """
     package_format = "generic"
     client = "generic"
 
-    def detect(self, log_text: str) -> bool:  # pragma: no cover - default
+    def log_matches_format_and_client(self, log_text: str) -> bool:  # pragma: no cover - default
         return False
 
     def extract(self, log_text: str):  # pragma: no cover - default
         return []
 
-    def normalize_name(self, name: str) -> str:
+    def normalise_name(self, name: str) -> str:
         return name
 
-    def normalize_version(self, version: str) -> str:
+    def normalise_version(self, version: str) -> str:
         return version
 
-    def parse(self, log_text: str, unique: bool):
+    def parse(self, log_text: str):
         seen = set()
         results = []
-        for ns, repo, name, ver in self.extract(log_text):
-            name_n = self.normalize_name(name)
-            ver_n = self.normalize_version(ver)
-            tup = (ns, repo, name_n, ver_n)
-            if not unique:
+        for workspace, repo, name, version in self.extract(log_text):
+            normalised_name = self.normalise_name(name)
+            normalised_version = self.normalise_version(version)
+            tup = (workspace, repo, normalised_name, normalised_version)
+            if tup not in seen:
+                seen.add(tup)
                 results.append(tup)
-            else:
-                if tup not in seen:
-                    seen.add(tup)
-                    results.append(tup)
         return results
 
 
@@ -323,7 +318,7 @@ class PythonPipParser(BaseFormatClientParser):
     # Extract from wheel filename e.g. python_gitlab-6.3.0-py3-none-any.whl
     ARTIFACT_FILENAME_RE = re.compile(r"/python/([A-Za-z0-9_.-]+)-([0-9][A-Za-z0-9_.-]*)-py[0-9]", re.IGNORECASE)
 
-    def detect(self, log_text: str) -> bool:
+    def log_matches_format_and_client(self, log_text: str) -> bool:
         return "ERROR: Could not install requirement" in log_text and "python" in log_text
 
     def extract(self, log_text: str):
@@ -369,12 +364,12 @@ class PythonPipParser(BaseFormatClientParser):
             ns, rp, pkg, ver = m.groups()
             yield (ns, rp, pkg, ver)
 
-    def normalize_name(self, name: str) -> str:
+    def normalise_name(self, name: str) -> str:
         # Keep original requested form (hyphens) if present; ensure underscores from artifact names
         # are converted to hyphens for consistency with pip requirement syntax.
         return name.replace('_', '-')
 
-    def normalize_version(self, version: str) -> str:
+    def normalise_version(self, version: str) -> str:
         # Strip trailing wheel/platform qualifiers if they slipped in (defensive)
         if not version:
             return version
@@ -388,18 +383,78 @@ PARSERS: list[BaseFormatClientParser] = [
 ]
 
 
+class NpmParser(BaseFormatClientParser):
+    package_format = "npm"
+    client = "npm"
+
+    # Match signed URL style (npm http fetch GET 403 ... dl.cloudsmith.io/signed/.../npm/<pkg>/<pkg>-<ver>.tgz)
+    NPM_SIGNED_FETCH_RE = re.compile(
+        r"npm http fetch GET 403\s+(https://dl\.cloudsmith\.io/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    # Match direct registry http fetch 403 lines (npm http fetch GET 403 https://npm.cloudsmith.io/ws/repo/<pkg>/-/<pkg>-<ver>.tgz)
+    NPM_HTTP_DIRECT_FETCH_RE = re.compile(
+        r"npm http fetch GET 403\s+(https://npm\.cloudsmith\.io/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    # Match npm.cloudsmith.io style (quarantine message version)
+    NPM_DIRECT_FETCH_RE = re.compile(
+        r"npm error 403 403 Forbidden - GET (https://npm\.cloudsmith\.io/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    # Generic 403 Forbidden GET (signed) in error line
+    NPM_ERROR_SIGNED_RE = re.compile(
+        r"npm error 403 403 Forbidden - GET (https://dl\.cloudsmith\.io/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    WORKSPACE_REPO_FROM_URL_RE = re.compile(r"https://(?:dl|npm)\.cloudsmith\.io/(?:signed/)?([^/]+)/([^/]+)/")
+
+    def log_matches_format_and_client(self, log_text: str) -> bool:
+        return 'npm ' in log_text and '403' in log_text
+
+    def extract(self, log_text: str):
+        matched = False
+        patterns = [
+            self.NPM_SIGNED_FETCH_RE,
+            self.NPM_HTTP_DIRECT_FETCH_RE,
+            self.NPM_DIRECT_FETCH_RE,
+            self.NPM_ERROR_SIGNED_RE,
+        ]
+        for pattern in patterns:
+            for m in pattern.finditer(log_text):
+                full_url, pkg, ver = m.groups()
+                ws_repo = self.WORKSPACE_REPO_FROM_URL_RE.search(full_url)
+                if not ws_repo:
+                    continue
+                workspace, repo = ws_repo.groups()
+                yield (workspace, repo, pkg, ver)
+                matched = True
+        if matched:
+            return
+
+    def normalise_name(self, name: str) -> str:
+        return name  # npm names usually kept as-is (ignoring scoped packages for now)
+
+    def normalise_version(self, version: str) -> str:
+        return version
+
+PARSERS.append(NpmParser())
+
+
 def parse_logs_for_all_details(log_text: str, unique: bool = True):
     """Parse log output for all (workspace, repo, package, version) tuples.
 
     Extensible pipeline:
-      1. Iterate registered parsers; the first whose detect() returns True is used.
+      1. Iterate registered parsers; the first whose log_matches_format_and_client() returns True is used.
       2. If that parser returns results, return them.
-      3. If detection passes but no results extracted, fall through to next parser.
+      3. If detection passes but no results extracted, fall through to next parser 
+        - this allows us to try multiple parsers where similar errors occur 
+        - TODO: it might make more sense to match package format and then iterate through multiple client parsers
       4. Return an empty list if no results found
     """
     for parser in PARSERS:
-        if parser.detect(log_text):
-            results = parser.parse(log_text, unique=unique)
+        if parser.log_matches_format_and_client(log_text):
+            results = parser.parse(log_text)
             if results:
                 return results
     return []
@@ -454,6 +509,11 @@ def package_insights(log, follow_up):
 
     api_key = get_api_key()
     headers = build_headers(api_key)
+
+    # Print Header
+    click.echo("=" * 60)
+    click.secho("☁️  CLOUDSMITH INSIGHTS ☁️", fg='cyan', bold=True)
+    click.echo("=" * 60)
 
     # Track whether any quarantined package exists to triggered an exit code after loop.
     quarantined_detected = False
