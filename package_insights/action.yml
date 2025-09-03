@@ -1,0 +1,24 @@
+name: 'Cloudsmith Package Insights'
+description: 'Reusable GitHub Action to check quarantine status and policy info for Cloudsmith packages using a Docker image.'
+author: 'cloudsmith-io'
+inputs:
+  log:
+    description: 'Build or Install log text (or a single line containing URLs) that may include a 403 for a package fetch.'
+    required: true
+  follow-up:
+    description: 'Optional custom follow-up instructions to display in the output. eg which slack channel to message or person to contact for assistance'
+    required: false
+    default: ''
+  api-key:
+    description: 'Cloudsmith API key for authentication'
+    required: true
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - ${{ inputs.log }}
+    - --follow-up
+    - ${{ inputs.follow-up }}
+branding:
+  icon: 'alert-triangle'
+  color: 'red'

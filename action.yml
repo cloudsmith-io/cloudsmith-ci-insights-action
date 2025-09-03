@@ -1,0 +1,78 @@
+name: 'Cloudsmith CI investigation'
+description: 'Cloudsmith CI investigation action: Accepts a log string directly or a job name whose logs will be fetched, then invokes Cloudsmith Package Insights.'
+author: 'cloudsmith-io'
+inputs:
+  log:
+    description: 'Build/Install log text (or single line containing URLs) that may include a 403 for a package fetch.'
+    required: false
+  job-name:
+    description: 'Name of a job (from the same workflow run) whose combined logs should be fetched and supplied as the log input.'
+    required: false
+  follow-up:
+    description: 'Optional custom follow-up instructions to display in the output.'
+    required: false
+    default: ''
+  api-key:
+    description: 'Cloudsmith API key for authentication.'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      id: validate
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${{ inputs.log }}" && -z "${{ inputs['job-name'] }}" ]]; then
+          echo 'Error: You must provide either "log" or "job-name" input.' >&2
+          exit 1
+        fi
+        if [[ -n "${{ inputs.log }}" && -n "${{ inputs['job-name'] }}" ]]; then
+          echo 'Error: Provide only one of "log" or "job-name" (not both).' >&2
+          exit 1
+        fi
+    - name: Fetch job logs (if job-name provided)
+      if: inputs.job-name != ''
+      id: fetch_logs
+      uses: cloudsmith-io/cloudsmith-ci-insights-action/job_log_fetcher@ENG-9137-poc-github-action
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        job-name: ${{ inputs['job-name'] }}
+        max-retries: '6'
+        retry-delay-seconds: '4'
+    - name: Create direct log file (if log provided)
+      if: inputs.log != ''
+      id: direct_log
+      shell: bash
+      run: |
+        set -euo pipefail
+        # If the provided log input is a path to an existing file, copy it; otherwise treat it as literal log content.
+        if [[ -f "${{ inputs.log }}" ]]; then
+          cp "${{ inputs.log }}" direct.log
+          echo "Detected existing file '${{ inputs.log }}' (size: $(wc -c < "${{ inputs.log }}") bytes); copied to direct.log"
+        else
+          printf "%s" "${{ inputs.log }}" > direct.log
+          echo "Treated input as inline content; wrote $(wc -c < direct.log) bytes to direct.log"
+        fi
+    - name: Determine log path
+      id: determine_log
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -n "${{ inputs['job-name'] }}" ]]; then
+          echo "value=${{ steps.fetch_logs.outputs.log-path }}" >> $GITHUB_OUTPUT
+        else
+          echo "value=direct.log" >> $GITHUB_OUTPUT
+        fi
+    - name: Run Cloudsmith Package Insights (with logs)
+      env:
+        CLOUDSMITH_API_KEY: ${{ inputs.api-key }}
+      uses: cloudsmith-io/cloudsmith-ci-insights-action/package_insights@ENG-9137-poc-github-action
+      with:
+        # Pass file path so underlying action can read file (avoids output size limits)
+        log: ${{ steps.determine_log.outputs.value }}
+        follow-up: ${{ inputs.follow-up }}
+branding:
+  icon: 'alert-triangle'
+  color: 'red'

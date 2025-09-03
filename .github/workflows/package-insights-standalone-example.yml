@@ -1,0 +1,46 @@
+name: Package Insights Standalone Example
+
+on:
+  workflow_dispatch:
+    inputs:
+      follow-up:
+        description: 'Optional follow-up instructions (e.g. contact #security-team)'
+        required: false
+        default: ''
+
+jobs:
+  insights:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Dry-run pip install (capturing log)
+        id: piplog
+        run: |
+          set -o pipefail
+          echo "Running pip dry-run"
+          pip install --dry-run spotipy==2.3.0 --index-url "${{ secrets.CLOUDSMITH_INDEX_URL }}" 2>&1 | tee pip_install.log || true
+
+          echo "--- Log Snippet (tail) ---"
+          tail -n 40 pip_install.log || true
+
+          # Set output
+          echo "pip_log_path=pip_install.log" >> "$GITHUB_OUTPUT"
+
+
+      - name: Run Cloudsmith Package Insights
+        uses: ./
+        with:
+          log: ${{ steps.piplog.outputs.pip_log_path }}
+          follow-up: ${{ github.event.inputs['follow-up'] }}
+          api-key: ${{ secrets.CLOUDSMITH_API_KEY }}
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
