@@ -54,3 +54,15 @@ def test_multiple_matches_with_duplicates():
         ("acme", "tools", "dupkg", "1.2.3"),
         ("acme", "tools", "other", "2.0.0"),
     ]
+
+
+def test_parse_logs_for_all_details_complex_name_and_version():
+    log = "ERROR: Could not install requirement from https://dl.cloudsmith.io/public/acme/tools/python/my.pkg_name-12.0.0.post1.tar.gz because of HTTP error 403 Client Error: Forbidden for url"
+    assert parse_logs_for_all_details(log)[0] == ("acme", "tools", "my.pkg-name", "12.0.0")
+
+
+def test_parse_logs_for_all_details_no_version_in_error_line_but_artifact_present():
+    log = (
+        "ERROR: Could not install requirement python-gitlab from https://dl.cloudsmith.io/public/ws/repo/python/python_gitlab-6.3.0-py3-none-any.whl#sha256=abc because of HTTP error 403 Client Error: Forbidden for url"
+    )
+    assert parse_logs_for_all_details(log)[0] == ("ws", "repo", "python-gitlab", "6.3.0")
