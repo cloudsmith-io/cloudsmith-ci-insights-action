@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote as _urlquote
 import sys
 import click
 import requests
@@ -116,59 +117,48 @@ def parse_package_entry(entry: str):
 
 
 def find_package(workspace: str, repo: str, headers: dict, name: str, version: Optional[str]):
-    """Iterate each package page until the (name, version) match is found or pages exhausted.
+    """Locate a package using Cloudsmith packages API."""
 
-    Cloudsmith pagination headers used:
-      x-pagination-pagetotal -> total number of pages (int)
-      x-pagination-count     -> current page (int) (provided in user description)
-    We request sequential pages and stop early once we locate the desired package.
-    """
     base_url = f"https://api.cloudsmith.io/packages/{workspace}/{repo}/"
+    
+    query_term = name if not version else f"name:{name} AND version:{version}"
     page = 1
     total_pages = None
-
     while True:
-        url = f"{base_url}?sort=-date&page={page}"
+        url = f"{base_url}?sort=-date&query={_urlquote(query_term)}&page={page}"
         resp = requests.get(url, headers=headers)
         if resp.status_code != 200:
             click.secho(
                 f"⚠️  Failed to list packages (page {page}) in {workspace}/{repo} (HTTP {resp.status_code})",
                 fg='yellow'
             )
-            click.echo(
-                f'   Response: {resp.text}'
-            )
+            click.echo(f'   Response: {resp.text}')
             return None
-
         try:
-            packages = resp.json()
+            payload = resp.json()
         except ValueError:
             click.secho(f"⚠️  Invalid JSON response for page {page}", fg='yellow')
             return None
 
-        if isinstance(packages, dict) and 'results' in packages:
-            packages_iter = packages.get('results', [])
+        if isinstance(payload, dict) and 'results' in payload:
+            packages_iter = payload.get('results', [])
         else:
-            packages_iter = packages
+            packages_iter = payload
 
         for pkg in packages_iter:
-            if pkg.get('display_name') == name:
-                if version is None or pkg.get('version') == version:
-                    return pkg
+            if pkg.get('display_name') == name and (version is None or pkg.get('version') == version):
+                return pkg
 
-        # Determine total pages (one-time)
         if total_pages is None:
             total_header = resp.headers.get('x-pagination-pagetotal')
             if total_header and total_header.isdigit():
                 total_pages = int(total_header)
             else:
-                # If no pagination headers, assume single page
-                return None
-
+                # No pagination headers -> assume single page; stop.
+                break
         page += 1
         if total_pages is not None and page > total_pages:
             break
-
     return None
 
 
