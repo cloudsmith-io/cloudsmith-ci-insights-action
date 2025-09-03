@@ -319,18 +319,26 @@ class PythonPipParser(BaseFormatClientParser):
     package_format = "python"
     client = "pip"
 
+    # Match name==version from error log
     ERROR_COULD_NOT_INSTALL_RE = re.compile(
         r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.-]*)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
         re.IGNORECASE,
     )
+    # MAtch name from error log (pip install called without specific version)
+    ERROR_COULD_NOT_INSTALL_NO_VER_RE = re.compile(
+        r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
+        re.IGNORECASE,
+    )
     WORKSPACE_REPO_FROM_URL_RE = re.compile(r"https://dl\.cloudsmith\.io/[^/]+/([^/]+)/([^/]+)/python/")
+    # Extract from wheel filename e.g. python_gitlab-6.3.0-py3-none-any.whl
+    ARTIFACT_FILENAME_RE = re.compile(r"/python/([A-Za-z0-9_.-]+)-([0-9][A-Za-z0-9_.-]*)-py[0-9]", re.IGNORECASE)
 
     def detect(self, log_text: str) -> bool:
         return "ERROR: Could not install requirement" in log_text and "python" in log_text
 
     def extract(self, log_text: str):
-        # Primary pattern (error lines)
-        any_yielded = False
+        # First: explicit version form
+        matched = False
         for m in self.ERROR_COULD_NOT_INSTALL_RE.finditer(log_text):
             pkg, ver, url = m.groups()
             nsrp = self.WORKSPACE_REPO_FROM_URL_RE.search(url)
@@ -338,21 +346,51 @@ class PythonPipParser(BaseFormatClientParser):
                 continue
             workspace, repo = nsrp.groups()
             yield (workspace, repo, pkg, ver)
-            any_yielded = True
-        if any_yielded:
+            matched = True
+        if matched:
             return
+
+        # Second: no-version form; derive version from artifact filename if possible
+        for m in self.ERROR_COULD_NOT_INSTALL_NO_VER_RE.finditer(log_text):
+            pkg, url = m.groups()
+            nsrp = self.WORKSPACE_REPO_FROM_URL_RE.search(url)
+            if not nsrp:
+                continue
+            workspace, repo = nsrp.groups()
+            ver = None
+            art = self.ARTIFACT_FILENAME_RE.search(url)
+            if art:
+                wheel_name, wheel_ver = art.groups()
+                ver = wheel_ver
+            else:
+                # As a fallback attempt to pull version from any artifact URL in log
+                art2 = self.ARTIFACT_FILENAME_RE.search(log_text)
+                if art2:
+                    _, wheel_ver = art2.groups()
+                    ver = wheel_ver
+            if ver:
+                yield (workspace, repo, pkg, ver)
+                matched = True
+        if matched:
+            return
+
         # Fallback: artifact URLs
         for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
             ns, rp, pkg, ver = m.groups()
             yield (ns, rp, pkg, ver)
 
     def normalize_name(self, name: str) -> str:
-        # pip preserves case; we keep as-is (could add PEP503 normalization later)
-        return name
+        # Keep original requested form (hyphens) if present; ensure underscores from artifact names
+        # are converted to hyphens for consistency with pip requirement syntax.
+        return name.replace('_', '-')
 
     def normalize_version(self, version: str) -> str:
-        # Best effort: trim wheel build suffixes if mistakenly captured (not expected with current regex)
-        return version
+        # Strip trailing wheel/platform qualifiers if they slipped in (defensive)
+        if not version:
+            return version
+        # Only keep semantic core (digits.digits.digits) optionally with pre/post/dev tags
+        m = re.match(r"(\d+\.\d+\.\d+(?:[a-zA-Z0-9]+)?)", version)
+        return m.group(1) if m else version
 
 
 PARSERS: list[BaseFormatClientParser] = [
