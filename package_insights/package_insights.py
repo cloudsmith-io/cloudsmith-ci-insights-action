@@ -198,10 +198,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
     quarantined = pkg.get('is_quarantined', False)
     version = pkg.get('version')
     
-    # Header with package info
-    click.echo("=" * 60)
-    click.secho("☁️  CLOUDSMITH INSIGHTS ☁️", fg='cyan', bold=True)
-    click.echo("=" * 60)
+    # Package info
     click.secho(f"📦 Package: {package_name}=={version} 📦", fg='white', bold=True)
     click.echo("-" * 40)
     
@@ -244,8 +241,9 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
         click.secho("🎯 Next Steps:", fg='magenta', bold=True)
         click.echo(f"   {follow_up}")
     
-    click.echo("=" * 60)
-    click.secho("❌ PACKAGE QUARANTINED", fg='red', bold=True)
+    click.echo("-" * 40)
+    click.echo()
+
     return quarantined # True
 
 
@@ -388,6 +386,64 @@ PARSERS: list[BaseFormatClientParser] = [
 ]
 
 
+class NpmParser(BaseFormatClientParser):
+    package_format = "npm"
+    client = "npm"
+
+    # Match signed URL style (npm http fetch GET 403 ... dl.cloudsmith.io/signed/.../npm/<pkg>/<pkg>-<ver>.tgz)
+    NPM_SIGNED_FETCH_RE = re.compile(
+        r"npm http fetch GET 403\s+(https://dl\.cloudsmith\.io/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    # Match direct registry http fetch 403 lines (npm http fetch GET 403 https://npm.cloudsmith.io/ws/repo/<pkg>/-/<pkg>-<ver>.tgz)
+    NPM_HTTP_DIRECT_FETCH_RE = re.compile(
+        r"npm http fetch GET 403\s+(https://npm\.cloudsmith\.io/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    # Match npm.cloudsmith.io style (quarantine message version)
+    NPM_DIRECT_FETCH_RE = re.compile(
+        r"npm error 403 403 Forbidden - GET (https://npm\.cloudsmith\.io/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    # Generic 403 Forbidden GET (signed) in error line
+    NPM_ERROR_SIGNED_RE = re.compile(
+        r"npm error 403 403 Forbidden - GET (https://dl\.cloudsmith\.io/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+        re.IGNORECASE,
+    )
+    WORKSPACE_REPO_FROM_URL_RE = re.compile(r"https://(?:dl|npm)\.cloudsmith\.io/(?:signed/)?([^/]+)/([^/]+)/")
+
+    def detect(self, log_text: str) -> bool:
+        return 'npm ' in log_text and '403' in log_text
+
+    def extract(self, log_text: str):
+        matched = False
+        patterns = [
+            self.NPM_SIGNED_FETCH_RE,
+            self.NPM_HTTP_DIRECT_FETCH_RE,
+            self.NPM_DIRECT_FETCH_RE,
+            self.NPM_ERROR_SIGNED_RE,
+        ]
+        for pattern in patterns:
+            for m in pattern.finditer(log_text):
+                full_url, pkg, ver = m.groups()
+                ws_repo = self.WORKSPACE_REPO_FROM_URL_RE.search(full_url)
+                if not ws_repo:
+                    continue
+                workspace, repo = ws_repo.groups()
+                yield (workspace, repo, pkg, ver)
+                matched = True
+        if matched:
+            return
+
+    def normalize_name(self, name: str) -> str:
+        return name  # npm names usually kept as-is (ignoring scoped packages for now)
+
+    def normalize_version(self, version: str) -> str:
+        return version
+
+PARSERS.append(NpmParser())
+
+
 def parse_logs_for_all_details(log_text: str, unique: bool = True):
     """Parse log output for all (workspace, repo, package, version) tuples.
 
@@ -455,6 +511,11 @@ def package_insights(log, follow_up):
 
     api_key = get_api_key()
     headers = build_headers(api_key)
+
+    # Print Header
+    click.echo("=" * 60)
+    click.secho("☁️  CLOUDSMITH INSIGHTS ☁️", fg='cyan', bold=True)
+    click.echo("=" * 60)
 
     # Track whether any quarantined package exists to triggered an exit code after loop.
     quarantined_detected = False

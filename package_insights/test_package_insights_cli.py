@@ -144,7 +144,7 @@ def test_cli_quarantined_package_exit_code_1(runner, monkeypatch):
     monkeypatch.setattr(package_insights_module.requests, "get", fake_get)
     result = runner.invoke(package_insights, [log_text])
     assert result.exit_code == 1
-    assert "PACKAGE QUARANTINED" in result.output
+    assert "Status: QUARANTINED" in result.output
     assert "Quarantine Policy" in result.output
     assert action_slug in result.output
 
@@ -165,7 +165,7 @@ def test_cli_quarantined_package_no_policy_match(runner, monkeypatch):
     monkeypatch.setattr(package_insights_module.requests, "get", fake_get)
     result = runner.invoke(package_insights, [log_text])
     assert result.exit_code == 1
-    assert "PACKAGE QUARANTINED" in result.output
+    assert "Status: QUARANTINED" in result.output
     # No policy details section should appear
     assert "No associated policy found" in result.output
 
@@ -229,4 +229,4 @@ def test_cli_multiple_with_quarantined_reports_all(runner, monkeypatch):
     assert result.exit_code == 1
     assert "cleanpkg==1.0.0" in result.output
     assert "badpkg==2.0.0" in result.output
-    assert "PACKAGE QUARANTINED" in result.output
+    assert "Status: QUARANTINED" in result.output
