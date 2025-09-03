@@ -61,7 +61,7 @@ def test_cli_parse_error_exit_code_2(runner, monkeypatch):
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
 
     # Includes 403 and python but malformed so regex doesn't match
-    log_text = "403 some python content but no package artifact filename"
+    log_text = "ERROR: Could not install requirement some python content but no package artifact filename due to 403"
 
     def fake_get(url, headers=None):  # pragma: no cover - shouldn't be reached due to parse failure
         raise AssertionError("Should not perform HTTP requests when parse fails")
@@ -76,7 +76,7 @@ def test_cli_package_not_found_exit_code_5(runner, monkeypatch):
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
 
     # Valid artifact URL pattern
-    log_text = "403 https://dl.cloudsmith.io/public/ns/repo/python/mypkg-1.0.0.tar.gz"
+    log_text = "ERROR: Could not install requirement mypkg==1.0.0 https://dl.cloudsmith.io/public/ns/repo/python/mypkg-1.0.0.tar.gz because of HTTP error 403 Client Error: Forbidden for url"
 
     def fake_get(url, headers=None):
         assert "packages/ns/repo/" in url
@@ -92,7 +92,7 @@ def test_cli_package_not_found_exit_code_5(runner, monkeypatch):
 
 def test_cli_blocked_package_success(runner, monkeypatch):
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
-    log_text = "403 https://dl.cloudsmith.io/public/acme/tools/python/samplepkg-2.1.0.whl"
+    log_text = "ERROR: Could not install requirement samplepkg==2.1.0 https://dl.cloudsmith.io/public/acme/tools/python/samplepkg-2.1.0.whl because of HTTP error 403 Client Error: Forbidden for url"
 
     package_payload = [_build_package("samplepkg", "2.1.0", quarantined=False, status_reason=None)]
 
@@ -115,7 +115,7 @@ def test_cli_blocked_package_success(runner, monkeypatch):
 
 def test_cli_quarantined_package_exit_code_1(runner, monkeypatch):
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
-    log_text = "403 https://dl.cloudsmith.io/public/acme/tools/python/infectedpkg-3.0.0.tar.gz"
+    log_text = "ERROR: Could not install requirement infectedpkg==3.0.0 https://dl.cloudsmith.io/public/acme/tools/python/infectedpkg-3.0.0.tar.gz because of HTTP error 403 Client Error: Forbidden for url"
 
     # Action slug that will be extracted
     action_slug = "ACT123"
@@ -153,9 +153,9 @@ def test_cli_quarantined_package_exit_code_1(runner, monkeypatch):
 def test_cli_quarantined_package_no_policy_match(runner, monkeypatch):
     """Quarantined package where action slug doesn't resolve to a policy action."""
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
-    log_text = "403 https://dl.cloudsmith.io/public/acme/tools/python/quarpkg-9.9.tar.gz"
+    log_text = "ERROR: Could not install requirement quarpkg==9.9.9 https://dl.cloudsmith.io/public/acme/tools/python/quarpkg-9.9.9.tar.gz because of HTTP error 403 Client Error: Forbidden for url"
     status_reason = "Quarantined by slug_perm 'NO_MATCH'"
-    package_payload = [_build_package("quarpkg", "9.9", quarantined=True, status_reason=status_reason)]
+    package_payload = [_build_package("quarpkg", "9.9.9", quarantined=True, status_reason=status_reason)]
 
     def fake_get(url, headers=None):
         if "packages/acme/tools" in url:
@@ -175,10 +175,10 @@ def test_cli_quarantined_package_no_policy_match(runner, monkeypatch):
 def test_cli_multiple_blocked_packages(runner, monkeypatch):
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
     log_text = (
-        "403 https://dl.cloudsmith.io/public/acme/tools/python/pkg1-1.0.0.tar.gz\n"
-        "403 https://dl.cloudsmith.io/public/acme/tools/python/pkg2-2.0.0.whl\n"
+        "ERROR: Could not install requirement pkg1==1.0.0 https://dl.cloudsmith.io/public/acme/tools/python/pkg1-1.0.0.tar.gz because of HTTP error 403 Client Error: Forbidden for url\n"
+        "ERROR: Could not install requirement pkg2==2.0.0 https://dl.cloudsmith.io/public/acme/tools/python/pkg2-2.0.0.whl because of HTTP error 403 Client Error: Forbidden for url\n"
         # duplicate (should be deduped)
-        "403 https://dl.cloudsmith.io/public/acme/tools/python/pkg1-1.0.0.tar.gz\n"
+        "ERROR: Could not install requirement pkg1==1.0.0 https://dl.cloudsmith.io/public/acme/tools/python/pkg1-1.0.0.tar.gz because of HTTP error 403 Client Error: Forbidden for url\n"
     )
 
     packages_payload = [
@@ -206,8 +206,8 @@ def test_cli_multiple_with_quarantined_reports_all(runner, monkeypatch):
     action_slug = "ACTZ"
     status_reason_quar = "Quarantined by slug_perm 'ACTZ'"
     log_text = (
-        "403 https://dl.cloudsmith.io/public/acme/tools/python/cleanpkg-1.0.0.tar.gz\n"
-        "403 https://dl.cloudsmith.io/public/acme/tools/python/badpkg-2.0.0.whl\n"
+        "ERROR: Could not install requirement cleanpkg==1.0.0 https://dl.cloudsmith.io/public/acme/tools/python/cleanpkg-1.0.0.tar.gz because of HTTP error 403 Client Error: Forbidden for url\n"
+        "ERROR: Could not install requirement badpkg==2.0.0 https://dl.cloudsmith.io/public/acme/tools/python/badpkg-2.0.0.whl because of HTTP error 403 Client Error: Forbidden for url\n"
     )
     packages_payload = [
         _build_package("cleanpkg", "1.0.0", quarantined=False, status_reason=None),

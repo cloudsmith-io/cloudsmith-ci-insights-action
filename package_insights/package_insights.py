@@ -27,9 +27,9 @@ def build_headers(api_key: str) -> dict:
     }
 
 
-def fetch_policies(namespace: str, headers: dict) -> dict:
+def fetch_policies(workspace: str, headers: dict) -> dict:
     """Return a dict of policy_slug_perm -> policy object."""
-    base_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/"
+    base_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/"
     page = 1
     total_pages = None
     policies = {}
@@ -63,9 +63,9 @@ def fetch_policies(namespace: str, headers: dict) -> dict:
             break
     return policies
 
-def fetch_policy_of_action(namespace: str, headers: dict, action_slug: str) -> str|None:
+def fetch_policy_of_action(workspace: str, headers: dict, action_slug: str) -> str|None:
     """Return a dict of policy_slug_perm -> policy object."""
-    base_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/"
+    base_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/"
     page = 1
     total_pages = None
 
@@ -83,7 +83,7 @@ def fetch_policy_of_action(namespace: str, headers: dict, action_slug: str) -> s
             break
         for policy in data.get('results', []):
             slug = policy.get('slug_perm')
-            actions_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/{slug}/actions/"
+            actions_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/{slug}/actions/"
             resp = requests.get(actions_url, headers=headers)
             if resp.status_code != 200:
                 click.secho(f"⚠️  Could not fetch actions for policy '{slug}' (HTTP {resp.status_code})", fg='yellow')
@@ -115,7 +115,7 @@ def parse_package_entry(entry: str):
     return entry, None
 
 
-def find_package(namespace: str, repo: str, headers: dict, name: str, version: Optional[str]):
+def find_package(workspace: str, repo: str, headers: dict, name: str, version: Optional[str]):
     """Iterate each package page until the (name, version) match is found or pages exhausted.
 
     Cloudsmith pagination headers used:
@@ -123,7 +123,7 @@ def find_package(namespace: str, repo: str, headers: dict, name: str, version: O
       x-pagination-count     -> current page (int) (provided in user description)
     We request sequential pages and stop early once we locate the desired package.
     """
-    base_url = f"https://api.cloudsmith.io/packages/{namespace}/{repo}/"
+    base_url = f"https://api.cloudsmith.io/packages/{workspace}/{repo}/"
     page = 1
     total_pages = None
 
@@ -132,7 +132,7 @@ def find_package(namespace: str, repo: str, headers: dict, name: str, version: O
         resp = requests.get(url, headers=headers)
         if resp.status_code != 200:
             click.secho(
-                f"⚠️  Failed to list packages (page {page}) in {namespace}/{repo} (HTTP {resp.status_code})",
+                f"⚠️  Failed to list packages (page {page}) in {workspace}/{repo} (HTTP {resp.status_code})",
                 fg='yellow'
             )
             click.echo(
@@ -182,12 +182,12 @@ def extract_action_slug(status_reason: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def find_policy_for_action_slug(policies: dict, action_slug: str, namespace: str, headers: dict) -> Optional[str]:
+def find_policy_for_action_slug(policies: dict, action_slug: str, workspace: str, headers: dict) -> Optional[str]:
     """Iterate policies and their actions to find which policy contains the action slug."""
     if not action_slug:
         return None
     for policy_slug, policy in policies.items():
-        actions_url = f"https://api.cloudsmith.io/v2/workspaces/{namespace}/policies/{policy_slug}/actions/"
+        actions_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/{policy_slug}/actions/"
         resp = requests.get(actions_url, headers=headers)
         if resp.status_code != 200:
             click.secho(f"⚠️  Could not fetch actions for policy '{policy_slug}' (HTTP {resp.status_code})", fg='yellow')
@@ -264,7 +264,7 @@ LOG_403_TARBALL_URL_RE = re.compile(
     (?:.*403.*?)?                              # Optional: any text before '403', non-greedy
     https://dl\.cloudsmith\.io/                # Match the base Cloudsmith URL
     [^/]+/                                     # Match the domain segment (not captured)
-    ([^/]+)/                                   # Capture group 1: namespace
+    ([^/]+)/                                   # Capture group 1: workspace
     ([^/]+)/                                   # Capture group 2: repo
     python/                                    # Match the 'python' segment
     ([A-Za-z0-9_.-]+)-                         # Capture group 3: package name
@@ -275,56 +275,106 @@ LOG_403_TARBALL_URL_RE = re.compile(
     re.VERBOSE
 )
 
-# Matches the 'ERROR: Could not install requirement <pkg>==<ver> from <url>' line
-ERROR_COULD_NOT_INSTALL_RE = re.compile(
-    r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.-]*)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
-    re.IGNORECASE,
-)
+class BaseFormatClientParser:
+    """Base parser for a (package_format, client) pair.
 
-# Extract namespace/repo from any Cloudsmith python artifact/index URL
-NS_REPO_FROM_URL_RE = re.compile(r"https://dl\.cloudsmith\.io/[^/]+/([^/]+)/([^/]+)/python/")
-def parse_logs_for_all_details(log_text: str, unique: bool = True):
-    """Parse log output for all (namespace, repo, package, version) tuples.
-
-    Strategy (revised):
-      1. Prefer lines of the form:
-         'ERROR: Could not install requirement <pkg>==<ver> from <url> ...'
-         extracting <pkg>, <ver>, and deriving namespace/repo from the <url>.
-      2. If no such lines are found, fall back to legacy artifact URL parsing
-         (extracting name/version directly from artifact filename).
+    Subclasses should implement:
+      detect(log_text): return True if this parser applies
+      extract(log_text): yield raw tuples (workspace, repo, package, version)
+      normalize_name(name)
+      normalize_version(version)
     """
-    results: list[tuple[str,str,str,str]] = []
-    seen: set[tuple[str,str,str,str]] = set()
+    package_format = "generic"
+    client = "generic"
 
-    # Primary: error lines
-    for m in ERROR_COULD_NOT_INSTALL_RE.finditer(log_text):
-        pkg, ver, url = m.groups()
-        nsrp = NS_REPO_FROM_URL_RE.search(url)
-        if not nsrp:
-            continue  # can't build tuple without namespace/repo
-        namespace, repo = nsrp.groups()
-        tup = (namespace, repo, pkg, ver)
-        if not unique:
-            results.append(tup)
-        else:
-            if tup not in seen:
-                seen.add(tup)
+    def detect(self, log_text: str) -> bool:  # pragma: no cover - default
+        return False
+
+    def extract(self, log_text: str):  # pragma: no cover - default
+        return []
+
+    def normalize_name(self, name: str) -> str:
+        return name
+
+    def normalize_version(self, version: str) -> str:
+        return version
+
+    def parse(self, log_text: str, unique: bool):
+        seen = set()
+        results = []
+        for ns, repo, name, ver in self.extract(log_text):
+            name_n = self.normalize_name(name)
+            ver_n = self.normalize_version(ver)
+            tup = (ns, repo, name_n, ver_n)
+            if not unique:
                 results.append(tup)
-
-    if results:
+            else:
+                if tup not in seen:
+                    seen.add(tup)
+                    results.append(tup)
         return results
 
-    # Fallback: artifact URLs
-    for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
-        ns, rp, pkg, ver = m.groups()
-        tup = (ns, rp, pkg, ver)
-        if not unique:
-            results.append(tup)
-        else:
-            if tup not in seen:
-                seen.add(tup)
-                results.append(tup)
-    return results
+
+class PythonPipParser(BaseFormatClientParser):
+    package_format = "python"
+    client = "pip"
+
+    ERROR_COULD_NOT_INSTALL_RE = re.compile(
+        r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.-]*)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
+        re.IGNORECASE,
+    )
+    WORKSPACE_REPO_FROM_URL_RE = re.compile(r"https://dl\.cloudsmith\.io/[^/]+/([^/]+)/([^/]+)/python/")
+
+    def detect(self, log_text: str) -> bool:
+        return "ERROR: Could not install requirement" in log_text and "python" in log_text
+
+    def extract(self, log_text: str):
+        # Primary pattern (error lines)
+        any_yielded = False
+        for m in self.ERROR_COULD_NOT_INSTALL_RE.finditer(log_text):
+            pkg, ver, url = m.groups()
+            nsrp = self.WORKSPACE_REPO_FROM_URL_RE.search(url)
+            if not nsrp:
+                continue
+            workspace, repo = nsrp.groups()
+            yield (workspace, repo, pkg, ver)
+            any_yielded = True
+        if any_yielded:
+            return
+        # Fallback: artifact URLs
+        for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
+            ns, rp, pkg, ver = m.groups()
+            yield (ns, rp, pkg, ver)
+
+    def normalize_name(self, name: str) -> str:
+        # pip preserves case; we keep as-is (could add PEP503 normalization later)
+        return name
+
+    def normalize_version(self, version: str) -> str:
+        # Best effort: trim wheel build suffixes if mistakenly captured (not expected with current regex)
+        return version
+
+
+PARSERS: list[BaseFormatClientParser] = [
+    PythonPipParser(),
+]
+
+
+def parse_logs_for_all_details(log_text: str, unique: bool = True):
+    """Parse log output for all (workspace, repo, package, version) tuples.
+
+    Extensible pipeline:
+      1. Iterate registered parsers; the first whose detect() returns True is used.
+      2. If that parser returns results, return them.
+      3. If detection passes but no results extracted, fall through to next parser.
+      4. Return an empty list if no results found
+    """
+    for parser in PARSERS:
+        if parser.detect(log_text):
+            results = parser.parse(log_text, unique=unique)
+            if results:
+                return results
+    return []
 
 
 def _read_log_text(log):
@@ -352,10 +402,10 @@ def _handle_parse_error():
     click.echo('   Could not extract package name and version information')
     sys.exit(2)
 
-def _handle_package_not_found(package_name, package_version, namespace, repo, follow_up):
+def _handle_package_not_found(package_name, package_version, workspace, repo, follow_up):
     """Handle error when package is not found in repository."""
     click.secho(f'❌ Package not found: {package_name}=={package_version}', fg='red', bold=True)
-    click.echo(f'   Not present in repository: {namespace}/{repo}')
+    click.echo(f'   Not present in repository: {workspace}/{repo}')
     if follow_up:
         click.echo()
         click.secho("🎯 Next Steps:", fg='magenta', bold=True)
@@ -366,7 +416,7 @@ def _handle_package_not_found(package_name, package_version, namespace, repo, fo
 @click.argument('log', nargs=1)
 @click.option('--follow-up', 'follow_up', required=False, help='Custom follow-up instructions to display with results.')
 def package_insights(log, follow_up):
-    """Parse a pip install log, derive package + namespace/repo, then look up quarantine/policy info."""
+    """Parse a pip install log, derive package + workspace/repo, then look up quarantine/policy info."""
     log_text = _read_log_text(log)
     if not _validate_log(log_text):
         return
@@ -380,16 +430,16 @@ def package_insights(log, follow_up):
 
     # Track whether any quarantined package exists to triggered an exit code after loop.
     quarantined_detected = False
-    for namespace, repo, package_name, package_version in matches:
-        match = find_package(namespace, repo, headers, package_name, package_version)
+    for workspace, repo, package_name, package_version in matches:
+        match = find_package(workspace, repo, headers, package_name, package_version)
         if match is None:
-            _handle_package_not_found(package_name, package_version, namespace, repo, follow_up)
+            _handle_package_not_found(package_name, package_version, workspace, repo, follow_up)
 
         status_reason = match.get('status_reason', 'No reason provided')
         action_slug = extract_action_slug(status_reason)
         policy_info = None
         if action_slug:
-            policy_info = fetch_policy_of_action(namespace, headers, action_slug)
+            policy_info = fetch_policy_of_action(workspace, headers, action_slug)
         quarantined = report_package(
             package_name,
             match,
