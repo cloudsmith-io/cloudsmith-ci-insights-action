@@ -484,10 +484,6 @@ def _validate_log(log_text):
         click.secho('ℹ️  No 403 errors detected in log', fg='blue')
         click.echo('   Insights are currently only supported for 403 (Forbidden) errors')
         return False
-    if 'python' not in log_text:
-        click.secho('ℹ️  Non-Python package detected', fg='blue') 
-        click.echo('   Currently only Python package formats are supported')
-        return False
     return True
 
 def _handle_parse_error():
