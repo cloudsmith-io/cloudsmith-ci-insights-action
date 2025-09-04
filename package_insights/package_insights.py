@@ -244,6 +244,10 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
         click.secho("🛡️  POLICY DETAILS:", fg='blue', bold=True)
         for line in policy_info.split('\n'):
             click.echo(f"   {line}")
+    else:
+        click.echo()
+        click.secho("🛡️  POLICY DETAILS:", fg='blue', bold=True)
+        click.echo("   No associated policy found")
     
     if follow_up:
         click.echo()
@@ -342,7 +346,9 @@ def package_insights(log, follow_up):
     status_reason = match.get('status_reason', 'No reason provided')
     action_slug = extract_action_slug(status_reason)
 
-    policy_info = fetch_policy_of_action(namespace, headers, action_slug)
+    policy_info = None
+    if action_slug:
+        policy_info = fetch_policy_of_action(namespace, headers, action_slug)
 
     report_package(package_name, match, policy_info, action_slug, follow_up=follow_up)
 
