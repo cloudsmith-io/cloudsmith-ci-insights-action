@@ -41,9 +41,12 @@ def runner():
     return CliRunner()
 
 
-def test_cli_non_403_log_exits_gracefully(runner, monkeypatch):
-    monkeypatch.delenv("CLOUDSMITH_API_KEY", raising=False)
+@pytest.fixture(autouse=True)
+def set_cloudsmith_api_key(monkeypatch):
     monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
+
+
+def test_cli_non_403_log_exits_gracefully(runner, monkeypatch):
 
     def fake_get(url, headers=None):  # pragma: no cover - shouldn't be called
         raise AssertionError("No HTTP calls expected for non-403 log")
@@ -58,7 +61,6 @@ def test_cli_non_403_log_exits_gracefully(runner, monkeypatch):
 
 
 def test_cli_parse_error_exit_code_2(runner, monkeypatch):
-    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
 
     # Includes 403 and python but malformed so regex doesn't match
     log_text = "403 some python content but no package artifact filename"
@@ -73,7 +75,6 @@ def test_cli_parse_error_exit_code_2(runner, monkeypatch):
 
 
 def test_cli_package_not_found_exit_code_5(runner, monkeypatch):
-    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
 
     # Valid artifact URL pattern
     log_text = "403 https://dl.cloudsmith.io/public/ns/repo/python/mypkg-1.0.0.tar.gz"
@@ -91,7 +92,6 @@ def test_cli_package_not_found_exit_code_5(runner, monkeypatch):
 
 
 def test_cli_blocked_package_success(runner, monkeypatch):
-    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
     log_text = "403 https://dl.cloudsmith.io/public/acme/tools/python/samplepkg-2.1.0.whl"
 
     package_payload = [_build_package("samplepkg", "2.1.0", quarantined=False, status_reason=None)]
@@ -114,7 +114,6 @@ def test_cli_blocked_package_success(runner, monkeypatch):
 
 
 def test_cli_quarantined_package_exit_code_1(runner, monkeypatch):
-    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
     log_text = "403 https://dl.cloudsmith.io/public/acme/tools/python/infectedpkg-3.0.0.tar.gz"
 
     # Action slug that will be extracted
@@ -152,7 +151,6 @@ def test_cli_quarantined_package_exit_code_1(runner, monkeypatch):
 
 def test_cli_quarantined_package_no_policy_match(runner, monkeypatch):
     """Quarantined package where action slug doesn't resolve to a policy action."""
-    monkeypatch.setenv("CLOUDSMITH_API_KEY", "dummy")
     log_text = "403 https://dl.cloudsmith.io/public/acme/tools/python/quarpkg-9.9.tar.gz"
     status_reason = "Quarantined by slug_perm 'NO_MATCH'"
     package_payload = [_build_package("quarpkg", "9.9", quarantined=True, status_reason=status_reason)]
