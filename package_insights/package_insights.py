@@ -255,7 +255,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
     return quarantined # True
 
 # -----------------------------
-# Parsers Functions
+# Parsers
 # -----------------------------
 
 LOG_403_TARBALL_URL_RE = re.compile(
