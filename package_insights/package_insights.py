@@ -5,6 +5,14 @@ import click
 import requests
 import re
 from typing import Optional
+from enum import IntEnum
+
+
+class ExitCode(IntEnum):
+    SUCCESS = 0
+    QUARANTINED_DETECTED = 1
+    PARSE_ERROR = 2
+    MISSING_API_KEY = 3
 
 
 # -----------------------------
@@ -17,7 +25,7 @@ def get_api_key() -> str:
         click.secho('❌ Missing API Key', fg='red', bold=True)
         click.echo('   CLOUDSMITH_API_KEY environment variable not set')
         click.secho('💡 Hint: export CLOUDSMITH_API_KEY=your_key_here', fg='blue')
-        sys.exit(1)
+        sys.exit(ExitCode.MISSING_API_KEY)
     return api_key
 
 
@@ -246,6 +254,9 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
 
     return quarantined # True
 
+# -----------------------------
+# Parsers Functions
+# -----------------------------
 
 LOG_403_TARBALL_URL_RE = re.compile(
     r"""
@@ -483,7 +494,7 @@ def _handle_parse_error():
     """Handle error when package details cannot be parsed."""
     click.secho('❌ Unable to parse package details from log', fg='red', bold=True)
     click.echo('   Could not extract package name and version information')
-    sys.exit(2)
+    sys.exit(ExitCode.PARSE_ERROR)
 
 def _handle_package_not_found(package_name, package_version, workspace, repo, follow_up):
     """Handle error when package is not found in repository."""
@@ -541,7 +552,7 @@ def package_insights(log, follow_up):
 
     if quarantined_detected:
         # After reporting all, use exit code 1 to indicate at least one quarantined
-        sys.exit(1)
+        sys.exit(ExitCode.QUARANTINED_DETECTED)
 
 
 
