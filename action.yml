@@ -34,7 +34,7 @@ runs:
     - name: Fetch job logs (if job-name provided)
       if: inputs.job-name != ''
       id: fetch_logs
-      uses: cloudsmith-io/cloudsmith-ci-insights-action/job_log_fetcher@ENG-9137-poc-github-action
+      uses: cloudsmith-io/cloudsmith-ci-insights-action/job_log_fetcher@main
       env:
         GITHUB_TOKEN: ${{ github.token }}
       with:
@@ -68,7 +68,7 @@ runs:
     - name: Run Cloudsmith Package Insights (with logs)
       env:
         CLOUDSMITH_API_KEY: ${{ inputs.api-key }}
-      uses: cloudsmith-io/cloudsmith-ci-insights-action/package_insights@ENG-9137-poc-github-action
+      uses: cloudsmith-io/cloudsmith-ci-insights-action/package_insights@main
       with:
         # Pass file path so underlying action can read file (avoids output size limits)
         log: ${{ steps.determine_log.outputs.value }}
