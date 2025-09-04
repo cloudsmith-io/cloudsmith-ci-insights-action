@@ -215,7 +215,7 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
             click.secho("🎯 Next Steps:", fg='magenta', bold=True)
             click.echo(f"   {follow_up}")
         click.echo("=" * 60)
-        return False  # not quarantined
+        return quarantined  # False
     
     # Quarantined package
     click.secho("🚫 Status: QUARANTINED", fg='red', bold=True)
