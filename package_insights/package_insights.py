@@ -135,15 +135,15 @@ def find_package(workspace: str, repo: str, headers: dict, name: str, version: O
             click.echo(f'   Response: {resp.text}')
             return None
         try:
-            payload = resp.json()
+            packages = resp.json()
         except ValueError:
             click.secho(f"⚠️  Invalid JSON response for page {page}", fg='yellow')
             return None
 
-        if isinstance(payload, dict) and 'results' in payload:
-            packages_iter = payload.get('results', [])
+        if isinstance(packages, dict) and 'results' in packages:
+            packages_iter = packages.get('results', [])
         else:
-            packages_iter = payload
+            packages_iter = packages
 
         for pkg in packages_iter:
             if pkg.get('display_name') == name and (version is None or pkg.get('version') == version):
