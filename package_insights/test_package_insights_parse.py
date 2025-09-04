@@ -65,6 +65,20 @@ class TestPythonLogParsing:
         )
         assert parse_logs_for_all_details(log)[0] == ("ws", "repo", "python-gitlab", "6.3.0")
 
+    def test_python_no_version_fallback_looks_elsewhere_for_artifact(self):
+        # URL in error line lacks artifact filename so version must be discovered elsewhere in log
+        log = (
+            "ERROR: Could not install requirement fallbackpkg from https://dl.cloudsmith.io/public/ws2/repo2/python/simple/fallbackpkg/ because of HTTP error 403 Client Error: Forbidden for url\n"
+            "Downloading https://dl.cloudsmith.io/public/ws2/repo2/python/fallbackpkg-2.4.0-py3-none-any.whl (15 kB)\n"
+        )
+        assert parse_logs_for_all_details(log)[0] == ("ws2", "repo2", "fallbackpkg", "2.4.0")
+
+    def test_python_fallback_tarball_url_only(self):
+        # Error line lacks package name or version so package info is discovered elsewhere in log
+        log = "ERROR: Could not install requirement https://dl.cloudsmith.io/public/acme/observability/python/agentlib-1.9.0.tar.gz\n"
+
+        assert parse_logs_for_all_details(log)[0] == ("acme", "observability", "agentlib", "1.9.0")
+
 
 class TestNpmLogParsing:
     @pytest.fixture(autouse=True)
@@ -110,6 +124,22 @@ class TestNpmLogParsing:
         assert ("workspace-name", "repository-name", "xmlbuilder", "11.0.1") in matches
         assert ("workspace-name", "repository-name", "querystring", "0.2.0") in matches
         assert ("workspace-name", "repository-name", "url", "0.10.3") in matches
+
+    def test_parse_npm_detection_no_match_returns_empty(self):
+        # Contains 'npm ' and '403' to trigger detection, but no recognized patterns
+        log = (
+            "npm WARN 403 rate limit exceeded for token\n"
+            "npm info attempt registry ping\n"
+        )
+        assert parse_logs_for_all_details(log) == []
+
+    def test_parse_npm_duplicate_signed_fetch_dedup(self):
+        log = (
+            "npm http fetch GET 403 https://dl.cloudsmith.io/signed/wsA/repoA/upstream/x/npm/dup/dup-0.1.0.tgz?created=1&expires=2 10ms\n"
+            "npm http fetch GET 403 https://dl.cloudsmith.io/signed/wsA/repoA/upstream/x/npm/dup/dup-0.1.0.tgz?created=1&expires=2 11ms\n"  # duplicate
+        )
+        matches = parse_logs_for_all_details(log)
+        assert matches == [("wsA", "repoA", "dup", "0.1.0")]
 
 
 class TestLogParsing:
