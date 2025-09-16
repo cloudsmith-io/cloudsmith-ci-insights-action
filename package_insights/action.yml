@@ -12,6 +12,27 @@ inputs:
   api-key:
     description: 'Cloudsmith API key for authentication'
     required: true
+  api-domain:
+    description: 'API domain override'
+    required: false
+    default: 'api.cloudsmith.io'
+  npm-domain:
+    description: 'NPM domain override'
+    required: false
+    default: 'npm.cloudsmith.io'
+  python-domain:
+    description: 'Python/download domain override'
+    required: false
+    default: 'python.cloudsmith.io'
+  docker-domain:
+    description: 'Docker domain override'
+    required: false
+    default: 'docker.cloudsmith.io'
+  download-domain:
+    description: 'Download domain override'
+    required: false
+    default: 'dl.cloudsmith.io'
+
 runs:
   using: 'docker'
   image: 'Dockerfile'
@@ -19,6 +40,16 @@ runs:
     - ${{ inputs.log }}
     - --follow-up
     - ${{ inputs.follow-up }}
+    - --api-domain
+    - ${{ inputs.api-domain }}
+    - --npm-domain
+    - ${{ inputs.npm-domain }}
+    - --python-domain
+    - ${{ inputs.python-domain }}
+    - --docker-domain
+    - ${{ inputs.docker-domain }}
+    - --download-domain
+    - ${{ inputs.download-domain }}
 branding:
   icon: 'alert-triangle'
   color: 'red'

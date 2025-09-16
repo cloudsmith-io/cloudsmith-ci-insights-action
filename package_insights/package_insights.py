@@ -7,6 +7,12 @@ import re
 from typing import Optional
 from enum import IntEnum
 
+try:
+    from .config import get_config
+except ImportError:
+    # Handle when run as script
+    from config import get_config
+
 
 class ExitCode(IntEnum):
     SUCCESS = 0
@@ -36,9 +42,9 @@ def build_headers(api_key: str) -> dict:
     }
 
 
-def fetch_policies(workspace: str, headers: dict) -> dict:
+def fetch_policies(workspace: str, headers: dict, api_root: str) -> dict:
     """Return a dict of policy_slug_perm -> policy object."""
-    base_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/"
+    base_url = f"https://{api_root}/v2/workspaces/{workspace}/policies/"
     page = 1
     total_pages = None
     policies = {}
@@ -72,9 +78,9 @@ def fetch_policies(workspace: str, headers: dict) -> dict:
             break
     return policies
 
-def fetch_policy_of_action(workspace: str, headers: dict, action_slug: str) -> str|None:
+def fetch_policy_of_action(workspace: str, headers: dict, action_slug: str, api_root: str) -> str|None:
     """Return a dict of policy_slug_perm -> policy object."""
-    base_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/"
+    base_url = f"https://{api_root}/v2/workspaces/{workspace}/policies/"
     page = 1
     total_pages = None
 
@@ -92,7 +98,7 @@ def fetch_policy_of_action(workspace: str, headers: dict, action_slug: str) -> s
             break
         for policy in data.get('results', []):
             slug = policy.get('slug_perm')
-            actions_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/{slug}/actions/"
+            actions_url = f"https://{api_root}/v2/workspaces/{workspace}/policies/{slug}/actions/"
             resp = requests.get(actions_url, headers=headers)
             if resp.status_code != 200:
                 click.secho(f"⚠️  Could not fetch actions for policy '{slug}' (HTTP {resp.status_code})", fg='yellow')
@@ -124,10 +130,9 @@ def parse_package_entry(entry: str):
     return entry, None
 
 
-def find_package(workspace: str, repo: str, headers: dict, name: str, version: Optional[str]):
+def find_package(workspace: str, repo: str, headers: dict, name: str, version: Optional[str], api_root: str):
     """Locate a package using Cloudsmith packages API."""
-
-    base_url = f"https://api.cloudsmith.io/packages/{workspace}/{repo}/"
+    base_url = f"https://{api_root}/packages/{workspace}/{repo}/"
     
     query_term = name if not version else f"name:{name} AND version:{version}"
     page = 1
@@ -180,12 +185,12 @@ def extract_action_slug(status_reason: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def find_policy_for_action_slug(policies: dict, action_slug: str, workspace: str, headers: dict) -> Optional[str]:
+def find_policy_for_action_slug(policies: dict, action_slug: str, workspace: str, headers: dict, api_root: str) -> Optional[str]:
     """Iterate policies and their actions to find which policy contains the action slug."""
     if not action_slug:
         return None
     for policy_slug, policy in policies.items():
-        actions_url = f"https://api.cloudsmith.io/v2/workspaces/{workspace}/policies/{policy_slug}/actions/"
+        actions_url = f"https://{api_root}/v2/workspaces/{workspace}/policies/{policy_slug}/actions/"
         resp = requests.get(actions_url, headers=headers)
         if resp.status_code != 200:
             click.secho(f"⚠️  Could not fetch actions for policy '{policy_slug}' (HTTP {resp.status_code})", fg='yellow')
@@ -258,22 +263,6 @@ def report_package(package_name: str, pkg: dict, policy_info: str, action_slug: 
 # Parsers
 # -----------------------------
 
-LOG_403_TARBALL_URL_RE = re.compile(
-    r"""
-    (?:.*403.*?)?                              # Optional: any text before '403', non-greedy
-    https://dl\.cloudsmith\.io/                # Match the base Cloudsmith URL
-    [^/]+/                                     # Match the domain segment (not captured)
-    ([^/]+)/                                   # Capture group 1: workspace
-    ([^/]+)/                                   # Capture group 2: repo
-    python/                                    # Match the 'python' segment
-    ([A-Za-z0-9_.-]+)-                         # Capture group 3: package name
-    ([0-9][A-Za-z0-9_.-]*)                     # Capture group 4: version (starts with a digit)
-    \.                                         # Literal dot before extension
-    (?:tar\.gz|zip|whl)                        # Match one of the allowed extensions
-    """,
-    re.VERBOSE
-)
-
 class BaseFormatClientParser:
     """Base parser for a (package_format, client) pair.
 
@@ -285,6 +274,14 @@ class BaseFormatClientParser:
     """
     package_format = "generic"
     client = "generic"
+    
+    def __init__(self, config):
+        """Initialize parser with configuration object.
+        
+        Args:
+            config: Configuration dict from get_config() containing domain settings
+        """
+        self.config = config
 
     def log_matches_format_and_client(self, log_text: str) -> bool:  # pragma: no cover - default
         return False
@@ -315,19 +312,43 @@ class PythonPipParser(BaseFormatClientParser):
     package_format = "python"
     client = "pip"
 
-    # Match name==version from error log
-    ERROR_COULD_NOT_INSTALL_RE = re.compile(
-        r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.-]*)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
-        re.IGNORECASE,
-    )
-    # Match name from error log (pip install called without specific version)
-    ERROR_COULD_NOT_INSTALL_NO_VER_RE = re.compile(
-        r"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)\s+from\s+(https://dl\.cloudsmith\.io/[^\s)]+)",
-        re.IGNORECASE,
-    )
-    WORKSPACE_REPO_FROM_URL_RE = re.compile(r"https://dl\.cloudsmith\.io/[^/]+/([^/]+)/([^/]+)/python/")
-    # Extract from wheel filename e.g. python_gitlab-6.3.0-py3-none-any.whl
-    ARTIFACT_FILENAME_RE = re.compile(r"/python/([A-Za-z0-9_.-]+)-([0-9][A-Za-z0-9_.-]*)-py[0-9]", re.IGNORECASE)
+    def __init__(self, config):
+        super().__init__(config)
+        
+        # Build regexes using download domain from config
+        download_root = self.config['CLOUDSMITH_DOWNLOAD_ROOT']
+        escaped_domain = re.escape(download_root)
+        
+        # Generic 403 tarball URL regex (moved from global scope)
+        self.LOG_403_TARBALL_URL_RE = re.compile(
+            rf"""
+            (?:.*403.*?)?                              # Optional: any text before '403', non-greedy
+            https://{escaped_domain}/                   # Match the base Cloudsmith URL
+            [^/]+/                                     # Match the domain segment (not captured)
+            ([^/]+)/                                   # Capture group 1: workspace
+            ([^/]+)/                                   # Capture group 2: repo
+            python/                                    # Match the 'python' segment
+            ([A-Za-z0-9_.-]+)-                         # Capture group 3: package name
+            ([0-9][A-Za-z0-9_.-]*)                     # Capture group 4: version (starts with a digit)
+            \.                                         # Literal dot before extension
+            (?:tar\.gz|zip|whl)                        # Match one of the allowed extensions
+            """,
+            re.VERBOSE
+        )
+        
+        # Match name==version from error log
+        self.ERROR_COULD_NOT_INSTALL_RE = re.compile(
+            rf"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.-]*)\s+from\s+(https://{escaped_domain}/[^\s)]+)",
+            re.IGNORECASE,
+        )
+        # Match name from error log (pip install called without specific version)
+        self.ERROR_COULD_NOT_INSTALL_NO_VER_RE = re.compile(
+            rf"ERROR: Could not install requirement\s+([A-Za-z0-9_.-]+)\s+from\s+(https://{escaped_domain}/[^\s)]+)",
+            re.IGNORECASE,
+        )
+        self.WORKSPACE_REPO_FROM_URL_RE = re.compile(rf"https://{escaped_domain}/[^/]+/([^/]+)/([^/]+)/python/")
+        # Extract from wheel filename e.g. python_gitlab-6.3.0-py3-none-any.whl
+        self.ARTIFACT_FILENAME_RE = re.compile(r"/python/([A-Za-z0-9_.-]+)-([0-9][A-Za-z0-9_.-]*)-py[0-9]", re.IGNORECASE)
 
     def log_matches_format_and_client(self, log_text: str) -> bool:
         return "ERROR: Could not install requirement" in log_text and "python" in log_text
@@ -371,7 +392,7 @@ class PythonPipParser(BaseFormatClientParser):
             return
 
         # Fallback: artifact URLs
-        for m in LOG_403_TARBALL_URL_RE.finditer(log_text):
+        for m in self.LOG_403_TARBALL_URL_RE.finditer(log_text):
             ns, rp, pkg, ver = m.groups()
             yield (ns, rp, pkg, ver)
 
@@ -389,38 +410,45 @@ class PythonPipParser(BaseFormatClientParser):
         return m.group(1) if m else version
 
 
-PARSERS: list[BaseFormatClientParser] = [
-    PythonPipParser(),
-]
-
-
 class NpmParser(BaseFormatClientParser):
     package_format = "npm"
     client = "npm"
 
-    # Match signed URL style (npm http fetch GET 403 ... dl.cloudsmith.io/signed/.../npm/<pkg>/<pkg>-<ver>.tgz)
-    NPM_SIGNED_FETCH_RE = re.compile(
-        r"npm http fetch GET 403\s+(https://dl\.cloudsmith\.io/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
-        re.IGNORECASE,
-    )
-    # Match direct registry http fetch 403 lines (npm http fetch GET 403 https://npm.cloudsmith.io/ws/repo/<pkg>/-/<pkg>-<ver>.tgz)
-    NPM_HTTP_DIRECT_FETCH_RE = re.compile(
-        r"npm http fetch GET 403\s+(https://npm\.cloudsmith\.io/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
-        re.IGNORECASE,
-    )
-    # Match npm.cloudsmith.io style (quarantine message version)
-    NPM_DIRECT_FETCH_RE = re.compile(
-        r"npm error 403 403 Forbidden - GET (https://npm\.cloudsmith\.io/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
-        re.IGNORECASE,
-    )
-    # Generic 403 Forbidden GET (signed) in error line
-    NPM_ERROR_SIGNED_RE = re.compile(
-        r"npm error 403 403 Forbidden - GET (https://dl\.cloudsmith\.io/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
-        re.IGNORECASE,
-    )
-    WORKSPACE_REPO_FROM_URL_RE = re.compile(r"https://(?:dl|npm)\.cloudsmith\.io/(?:signed/)?([^/]+)/([^/]+)/")
+    def __init__(self, config):
+        super().__init__(config)
+        
+        # Build regexes using domains from config
+        download_root = self.config['CLOUDSMITH_DOWNLOAD_ROOT']
+        npm_root = self.config['CLOUDSMITH_NPM_ROOT']
+        escaped_download_domain = re.escape(download_root)
+        escaped_npm_domain = re.escape(npm_root)
+        print(escaped_download_domain)
+        print(escaped_npm_domain)
+        
+        # Match signed URL style (npm http fetch GET 403 ... dl.cloudsmith.io/signed/.../npm/<pkg>/<pkg>-<ver>.tgz)
+        self.NPM_SIGNED_FETCH_RE = re.compile(
+            rf"npm http fetch GET 403\s+(https://{escaped_download_domain}/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+            re.IGNORECASE,
+        )
+        # Match direct registry http fetch 403 lines (npm http fetch GET 403 https://npm.cloudsmith.io/ws/repo/<pkg>/-/<pkg>-<ver>.tgz)
+        self.NPM_HTTP_DIRECT_FETCH_RE = re.compile(
+            rf"npm http fetch GET 403\s+(https://{escaped_npm_domain}/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+            re.IGNORECASE,
+        )
+        # Match npm.cloudsmith.io style (quarantine message version)
+        self.NPM_DIRECT_FETCH_RE = re.compile(
+            rf"npm error 403 403 Forbidden - GET (https://{escaped_npm_domain}/[^\s]+/([A-Za-z0-9_.-]+)/-/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+            re.IGNORECASE,
+        )
+        # Generic 403 Forbidden GET (signed) in error line
+        self.NPM_ERROR_SIGNED_RE = re.compile(
+            rf"npm error 403 403 Forbidden - GET (https://{escaped_download_domain}/[^\s]+/npm/([A-Za-z0-9_.-]+)/\2-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz)",
+            re.IGNORECASE,
+        )
+        self.WORKSPACE_REPO_FROM_URL_RE = re.compile(rf"https://(?:{escaped_download_domain}|{escaped_npm_domain})/(?:signed/)?([^/]+)/([^/]+)/")
 
     def log_matches_format_and_client(self, log_text: str) -> bool:
+        print(log_text)
         return 'npm ' in log_text and '403' in log_text
 
     def extract(self, log_text: str):
@@ -449,11 +477,14 @@ class NpmParser(BaseFormatClientParser):
     def normalise_version(self, version: str) -> str:
         return version
 
-PARSERS.append(NpmParser())
 
-
-def parse_logs_for_all_details(log_text: str, unique: bool = True):
+def parse_logs_for_all_details(log_text: str, config: dict, unique: bool = True):
     """Parse log output for all (workspace, repo, package, version) tuples.
+
+    Args:
+        log_text: The log text to parse
+        config: Configuration dict with domain settings (from get_config())
+        unique: Whether to return only unique results
 
     Extensible pipeline:
       1. Iterate registered parsers; the first whose log_matches_format_and_client() returns True is used.
@@ -463,7 +494,13 @@ def parse_logs_for_all_details(log_text: str, unique: bool = True):
         - TODO: it might make more sense to match package format and then iterate through multiple client parsers
       4. Return an empty list if no results found
     """
-    for parser in PARSERS:
+    # Create parsers with config object
+    parsers = [
+        PythonPipParser(config),
+        NpmParser(config),
+    ]
+    
+    for parser in parsers:
         if parser.log_matches_format_and_client(log_text):
             results = parser.parse(log_text)
             if results:
@@ -504,12 +541,33 @@ def _handle_package_not_found(package_name, package_version, workspace, repo, fo
 @click.command()
 @click.argument('log', nargs=1)
 @click.option('--follow-up', 'follow_up', required=False, help='Custom follow-up instructions to display with results.')
-def package_insights(log, follow_up):
+@click.option('--api-domain', 'api_domain', required=False, default="api.cloudsmith.io",
+              help='API domain override')
+@click.option('--npm-domain', 'npm_domain', required=False, default="npm.cloudsmith.io",
+              help='NPM domain override')
+@click.option('--python-domain', 'python_domain', required=False, default="python.cloudsmith.io",
+              help='Python/download domain override')
+@click.option('--docker-domain', 'docker_domain', required=False, default="docker.cloudsmith.io",
+              help='Docker domain override')
+@click.option('--download-domain', 'download_domain', required=False, default="dl.cloudsmith.io",
+              help='Download domain override')
+def package_insights(log, follow_up, api_domain, npm_domain, python_domain, docker_domain, download_domain):
     """Parse a pip install log, derive package + workspace/repo, then look up quarantine/policy info."""
+
+    config = get_config(
+        api_domain=api_domain,
+        npm_domain=npm_domain,
+        python_domain=python_domain,
+        docker_domain=docker_domain,
+        download_domain=download_domain
+    )
+
+    print(config)
+    
     log_text = _read_log_text(log)
     if not _validate_log(log_text):
         return
-    matches = parse_logs_for_all_details(log_text, unique=True)
+    matches = parse_logs_for_all_details(log_text, config, unique=True)
     if not matches:
         _handle_parse_error()
         return
@@ -525,7 +583,7 @@ def package_insights(log, follow_up):
     # Track whether any quarantined package exists to triggered an exit code after loop.
     quarantined_detected = False
     for workspace, repo, package_name, package_version in matches:
-        match = find_package(workspace, repo, headers, package_name, package_version)
+        match = find_package(workspace, repo, headers, package_name, package_version, config["CLOUDSMITH_API_ROOT"])
         if match is None:
             # Report missing package but continue processing remaining packages.
             _handle_package_not_found(package_name, package_version, workspace, repo, follow_up)
@@ -535,7 +593,7 @@ def package_insights(log, follow_up):
         action_slug = extract_action_slug(status_reason)
         policy_info = None
         if action_slug:
-            policy_info = fetch_policy_of_action(workspace, headers, action_slug)
+            policy_info = fetch_policy_of_action(workspace, headers, action_slug, config["CLOUDSMITH_API_ROOT"])
         quarantined = report_package(
             package_name,
             match,
