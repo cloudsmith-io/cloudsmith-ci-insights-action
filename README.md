@@ -1,9 +1,19 @@
-# Cloudsmith CI investigation
+# Cloudsmith Package Insights Action
 
-This composite action wraps the `Cloudsmith Package Insights` Docker action and lets you either:
+This composite GitHub Action provides the Package Insights action tool. This tool analyzes the output of package installation logs and offers developers additional information and context when debugging workflows.
 
-1. Provide log text directly, or
-2. Provide the name of another job in the *same workflow run* whose logs will be fetched automatically via the GitHub API and passed to the underlying action.
+The action can be used in one of two ways:
+
+1. By providing log text directly, or
+1. By providing the name of another job in the same workflow run, whose logs will be fetched automatically via the GitHub API and passed to the underlying action.
+
+## Use cases
+
+Cloudsmith provides several ways to prevent package downloads when they're deemed unsafe. These include blocking downloads of the package before 
+it's been scanned for vulnerabilities and quarantining packages if they're found to contain malware.
+
+Notably, customers can quarantine their own packages through the Enterprise Policy Management system. This action will notify developers if their
+downloads have been prevented due to a policy created by their organization. 
 
 ## Inputs
 
