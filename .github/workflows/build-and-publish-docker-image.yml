@@ -1,0 +1,38 @@
+name: Release and Publish Docker image
+
+on:
+    push:
+        branches:
+            - "main"
+
+permissions:
+ contents: write
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        env:
+            DOCKER_IMAGE_NAME: docker.cloudsmith.io/${{ vars.CLOUDSMITH_NAMESPACE }}/package-insights/package-insights
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+            - name: Semantic Release
+              id: semantic_release
+              uses: cycjimmy/semantic-release-action@v4
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Get version from semantic release
+              id: get_version
+              if: steps.semantic_release.outputs.new_release_published == 'true'
+              run: echo "VERSION=${{ steps.semantic_release.outputs.new_release_version }}" >> $GITHUB_ENV
+            - name: Build Docker image
+              id: build_insights_image
+              if: steps.semantic_release.outputs.new_release_published == 'true'
+              run: |
+                  docker build -t ${{ env.DOCKER_IMAGE_NAME }}:${{ env.VERSION }} package_insights/
+            - name: Push Docker image to Cloudsmith/
+              id: push_dockerised_cli_cloudsmith
+              if: steps.semantic_release.outputs.new_release_published == 'true'
+              run: |
+                  echo "${CLOUDSMITH_API_KEY}" | docker login docker.cloudsmith.io -u ${{ vars.CLOUDSMITH_SERVICE_USER }} --password-stdin
+                  docker push ${{ env.DOCKER_IMAGE_NAME }}:${{ env.VERSION }}
