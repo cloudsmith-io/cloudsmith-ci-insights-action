@@ -30,7 +30,7 @@ jobs:
               if: steps.semantic_release.outputs.new_release_published == 'true'
               run: |
                   docker build -t ${{ env.DOCKER_IMAGE_NAME }}:${{ env.VERSION }} package_insights/
-            - name: Push Docker image to Cloudsmith/
+            - name: Push Docker image to Cloudsmith
               id: push_dockerised_cli_cloudsmith
               if: steps.semantic_release.outputs.new_release_published == 'true'
               run: |
