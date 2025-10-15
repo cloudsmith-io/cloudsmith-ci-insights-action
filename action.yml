@@ -15,6 +15,30 @@ inputs:
   api-key:
     description: 'Cloudsmith API key for authentication.'
     required: true
+  api-domain:
+    description: 'API domain override'
+    required: false
+    default: 'api.cloudsmith.io'
+  npm-domain:
+    description: 'NPM domain override'
+    required: false
+    default: 'npm.cloudsmith.io'
+  python-domain:
+    description: 'Python/download domain override'
+    required: false
+    default: 'python.cloudsmith.io'
+  docker-domain:
+    description: 'Docker domain override'
+    required: false
+    default: 'docker.cloudsmith.io'
+  download-domain:
+    description: 'Download domain override'
+    required: false
+    default: 'dl.cloudsmith.io'
+  action-ref:
+    description: 'Git reference for the package insights action (defaults to main)'
+    required: false
+    default: 'main'
 runs:
   using: 'composite'
   steps:
@@ -31,6 +55,7 @@ runs:
           echo 'Error: Provide only one of "log" or "job-name" (not both).' >&2
           exit 1
         fi
+
     - name: Fetch job logs (if job-name provided)
       if: inputs.job-name != ''
       id: fetch_logs
@@ -41,6 +66,7 @@ runs:
         job-name: ${{ inputs['job-name'] }}
         max-retries: '6'
         retry-delay-seconds: '4'
+
     - name: Create direct log file (if log provided)
       if: inputs.log != ''
       id: direct_log
@@ -55,6 +81,7 @@ runs:
           printf "%s" "${{ inputs.log }}" > direct.log
           echo "Treated input as inline content; wrote $(wc -c < direct.log) bytes to direct.log"
         fi
+
     - name: Determine log path
       id: determine_log
       shell: bash
@@ -65,6 +92,7 @@ runs:
         else
           echo "value=direct.log" >> $GITHUB_OUTPUT
         fi
+
     - name: Run Cloudsmith Package Insights (with logs)
       env:
         CLOUDSMITH_API_KEY: ${{ inputs.api-key }}
@@ -73,6 +101,11 @@ runs:
         # Pass file path so underlying action can read file (avoids output size limits)
         log: ${{ steps.determine_log.outputs.value }}
         follow-up: ${{ inputs.follow-up }}
+        api-domain: ${{ inputs.api-domain }}
+        npm-domain: ${{ inputs.npm-domain }}
+        python-domain: ${{ inputs.python-domain }}
+        docker-domain: ${{ inputs.docker-domain }}
+        download-domain: ${{ inputs.download-domain }}
 branding:
   icon: 'alert-triangle'
   color: 'red'
